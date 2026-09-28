@@ -11,12 +11,14 @@ The main node provides:
 - nine image slots in a fixed 3 × 3 gallery;
 - three video slots;
 - three standalone audio slots;
-- click-to-pick and drag-and-drop upload;
-- inline image/video previews and persistent workflow metadata;
+- click-to-pick and drag-and-drop upload, plus a typed input on each slot for `Load Image` / `Load Video` / `Load Audio` or processed media;
+- a connected wire on a slot overrides that slot's uploaded file;
 - the original `@` reference editor for `<Picture i>`, `<Video i>`, and `<Audio i>`;
 - default 24 FPS and 10-second generation;
 - reference-image short-edge presets of 480, 544, 640, 736, 768, 832, 928, 1024, and 1088;
 - Advanced options include **Force offload (with post-sampling cache release)** and optional **Complete low-VRAM streamed blocks (experimental)**. The former releases unused allocator cache after sampling and before VAE decoding; the latter streams H3 QKV, attention, MLP/SwiGLU, and output-head work. Do not chain `ModelAttentionBackend / comfy kitchen attention` when this option is enabled;
+- official `match` / `max` reference-image sizing (`match` scales to the generation canvas, `max` uses a 2048 short edge);
+
 - prompt-optimizer settings for Zhipu, xFlow API aggregation, Ollama, Alibaba Cloud, DeepSeek, and custom OpenAI/Gemini/Ollama-compatible APIs;
 - built-in and user-defined prompt schemes.
 
@@ -30,9 +32,12 @@ Nodes appear under `FeiHou Easy H3`:
 
 - `加载LoRA（旁路，仅模型）（用于调试）` (the same native canvas stack UI as `FeiHou LoRA Stack (Merge/Extract)`)
 - `FeiHou Easy H3 Loader`
+- `FeiHou Easy H3 Hybrid Loader` (one transformer for hybrid FL2VA+REF2VA checkpoints)
 - `ComfyUI-FeiHou-Easy-H3`
+
 - `FeiHou Easy H3 Model Adapter`
 - `FeiHou Easy H3 Output`
+- `FeiHou Easy H3 二采条件适配` (after latent upscale, before the second sampler; default mode resizes first/last-frame keyframes to the target canvas, or drop them; never rewrites refs)
 - `FeiHou Easy H3 Prompt Preview`
 
 Place the LoRA stack to the left of `FeiHou Easy H3 Loader` and connect its `lora_stack` output to the loader's left-side `LoRA stack` input. The loader applies every enabled LoRA internally; the LoRA node is not inserted into the main node's downstream `MODEL` chain.

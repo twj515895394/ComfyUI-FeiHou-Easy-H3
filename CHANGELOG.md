@@ -132,6 +132,33 @@
   file list. Newly saved models under `models/diffusion_models` now appear the
   next time ComfyUI refreshes node definitions, without requiring a further
   server restart.
+## v1.3.7
+
+- Gallery external IMAGE/VIDEO/AUDIO wires persist across browser refresh. Virtual links are serialized on the node and no longer deleted during onNodeCreated/onAdded/onConfigure.
+- Does not re-expose hidden media sockets to Vue, so the main node height stays collapsed.
+
+## v1.3.6
+
+- `FeiHou Easy H3 混合加载器` accepts an optional `VAE` wire (`video_vae_override` / 外部视频VAE). A connected TensorRT or other VAE loader wins over the built-in `video_vae` combo.
+- Fixes gallery socket wiring: native `IMAGE` / `VIDEO` / `AUDIO` inputs are kept so Load Image tensors reach the node. Click-uploaded stills load via Pillow instead of `LoadImage`/`VideoFromFile`, which could native-crash on Windows.
+
+## v1.3.5
+
+- Adds `FeiHou Easy H3 二采条件适配`: after a latent upscale, align (or drop) first/last-frame `minimax_keyframes` to the second-pass canvas. Default mode scales keyframe video latents to the target `H×W`; the other mode drops those keyframes. `minimax_refs` are never rewritten, so text-to-video and reference-to-video can leave the node in the graph as a no-op.
+
+## v1.3.4
+
+- Gallery slots now accept native `IMAGE` / `VIDEO` / `AUDIO` wires (Load Image, processed frames, etc.) in addition to click/drop upload. A connected wire wins over the uploaded file in that slot.
+
+- Adds `FeiHou Easy H3 混合加载器`: one transformer slot for hybrid FL2VA+REF2VA checkpoints. The original two-slot loader is unchanged.
+- Aligns `ref_image_size` with the official MiniMax H3 `match`/`max` options and shows it in reference mode. Saved short-edge presets still load.
+
+
+## v1.3.3
+
+- Replaces the misleading `480P`/`720P`/`1080P` canvas labels with official H3 megapixel presets (`0.2`–`2.0`, including `0.6`, `0.8`, and `0.98`).
+- Saved workflows that still store the old `P` labels continue to load and map to the same canvas sizes.
+
 
 ## v1.3.2
 

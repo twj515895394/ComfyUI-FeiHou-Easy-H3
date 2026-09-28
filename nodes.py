@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
+import numpy as np
+from PIL import Image, ImageOps
 import torch
 import torchaudio
 
@@ -46,6 +48,26 @@ from comfy_extras import nodes_minimax_h3 as h3
 from comfy_extras import nodes_audio as comfy_audio_nodes
 from comfy_api.latest import InputImpl
 from .production_pack import SHOT_TYPE, register_routes as register_production_pack_routes
+from .second_pass import DEFAULT_MODE, SECOND_PASS_MODES, adapt_second_pass
+
+# Ryan ACP Agent integration (optional dependency)
+# ComfyUI 按字母序加载 custom_nodes，本插件先于 Ryan_Comfy_Utils 被加载，
+# 后者目录此时尚未加入 sys.path，直接 import 会 ImportError，需手动补路径后重试
+try:
+    from ryan_comfy_utils.acp.feihou_bridge import run_h3_agent as _ryan_h3_agent
+    _RYAN_ACP_AVAILABLE = True
+except ImportError:
+    _ryan_utils_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Ryan_Comfy_Utils"
+    )
+    if os.path.isdir(_ryan_utils_dir) and _ryan_utils_dir not in sys.path:
+        sys.path.insert(0, _ryan_utils_dir)
+    try:
+        from ryan_comfy_utils.acp.feihou_bridge import run_h3_agent as _ryan_h3_agent
+        _RYAN_ACP_AVAILABLE = True
+    except ImportError:
+        _ryan_h3_agent = None
+        _RYAN_ACP_AVAILABLE = False
 
 
 MODE_IMAGE = "image"
@@ -53,28 +75,53 @@ MODE_REFERENCE = "reference"
 H3_DURATION_CONTROL_TYPE = "FEIHOU_H3_DURATION_CONTROL"
 KEYFRAME_FIRST = "first"
 KEYFRAME_LAST = "last"
-# ``match`` intentionally mirrors the official MiniMaxH3ReferenceToVideo
-# behaviour: scale to the generation pixel area, down only.  The numeric
-# values remain explicit short-edge caps for users who need fixed fidelity.
-REFERENCE_SHORT_EDGES = ("match", "480", "544", "640", "736", "768", "832", "928", "1024", "1088")
+REF_IMAGE_MATCH = "match"
+REF_IMAGE_MAX = "max"
+REFERENCE_SHORT_EDGES = (REF_IMAGE_MATCH, REF_IMAGE_MAX, "480", "544", "640", "736", "768", "832", "928", "1024", "1088")
+REF_IMAGE_SIZES = REFERENCE_SHORT_EDGES
 REF_IMAGE_DEFAULT = "480"
+OPTIMIZER_SHORT_EDGES = (480, 544, 640, 736, 768, 832, 928, 1024, 1088)
+OPTIMIZER_SHORT_EDGE_DEFAULT = 480
 REFERENCE_MENTION_FILENAME = "filename"
 REFERENCE_MENTION_INDEX = "index"
 NONE_MODEL = "none"
 NONE_MODEL_DISPLAY_VALUES = (NONE_MODEL, "None", "无")
 NONE_MODEL_ALIASES = {value.lower() for value in NONE_MODEL_DISPLAY_VALUES}
-RESOLUTION_360 = "360P"
-RESOLUTION_416 = "416P"
-RESOLUTION_480 = "480P"
-RESOLUTION_540 = "540P"
-RESOLUTION_640 = "640P"
-RESOLUTION_720 = "720P"
-RESOLUTION_768 = "768P"
-RESOLUTION_832 = "832P"
-RESOLUTION_928 = "928P"
-RESOLUTION_1024 = "1024P"
-RESOLUTION_1080 = "1080P"
 RESOLUTION_CUSTOM = "custom"
+RESOLUTION_DEFAULT = "0.4"
+RESOLUTION_MEGAPIXELS = {
+    "0.2": 0.2,
+    "0.3": 0.3,
+    "0.4": 0.4,
+    "0.5": 0.5,
+    "0.6": 0.6,
+    "0.7": 0.7,
+    "0.8": 0.8,
+    "0.9": 0.9,
+    "0.98": 0.98,
+    "1.0": 1.0,
+    "1.2": 1.2,
+    "1.5": 1.5,
+    "1.8": 1.8,
+    "2.0": 2.0,
+}
+RESOLUTION_ALIASES = {
+    "360P": "0.2",
+    "416P": "0.3",
+    "480P": "0.4",
+    "540P": "0.5",
+    "640P": "0.7",
+    "720P": "0.9",
+    "768P": "1.0",
+    "832P": "1.2",
+    "928P": "1.5",
+    "1024P": "1.8",
+    "1080P": "2.0",
+    "1": "1.0",
+    "2": "2.0",
+}
+RESOLUTIONS = (*RESOLUTION_MEGAPIXELS, RESOLUTION_CUSTOM)
+
 ASPECT_SQUARE = "1:1"
 ASPECT_PHOTO_PORTRAIT = "2:3"
 ASPECT_PHOTO = "3:2"
@@ -83,21 +130,6 @@ ASPECT_STANDARD = "4:3"
 ASPECT_WIDESCREEN_PORTRAIT = "9:16"
 ASPECT_WIDESCREEN = "16:9"
 ASPECT_ULTRAWIDE = "21:9"
-RESOLUTION_MEGAPIXELS = {
-    RESOLUTION_360: 0.2,
-    RESOLUTION_416: 0.3,
-    RESOLUTION_480: 0.4,
-    RESOLUTION_540: 0.5,
-    RESOLUTION_640: 0.7,
-    RESOLUTION_720: 0.9,
-    RESOLUTION_768: 1.0,
-    RESOLUTION_832: 1.2,
-    RESOLUTION_928: 1.5,
-    RESOLUTION_1024: 1.8,
-    RESOLUTION_1080: 2.0,
-}
-RESOLUTIONS = (*RESOLUTION_MEGAPIXELS, RESOLUTION_CUSTOM)
-REFERENCE_SIZE_SEARCH_RADIUS = 16
 ASPECT_RATIOS = {
     ASPECT_SQUARE: (1, 1),
     ASPECT_PHOTO_PORTRAIT: (2, 3),
@@ -112,6 +144,12 @@ MAX_MEDIA = 15
 MAX_IMAGES = 9
 MAX_VIDEOS = 3
 MAX_AUDIOS = 3
+MEDIA_SLOT_SPECS = (
+    *(("image", index) for index in range(1, MAX_IMAGES + 1)),
+    *(("video", index) for index in range(1, MAX_VIDEOS + 1)),
+    *(("audio", index) for index in range(1, MAX_AUDIOS + 1)),
+)
+
 LORA_STACK_TYPE = "FEIHOU_MERGE_LORA_STACK"
 MIN_SECONDS = 0.2
 MAX_SECONDS = 30.0
@@ -229,37 +267,10 @@ PROMPT_OPTIMIZER_CONFIG_DEFAULTS = {
     "active_scheme": "none",
     "custom_schemes": [],
     "read_media": False,
+    "ryan_h3_dual_skill": False,
 }
 
 
-def _reference_aligned_size(image_w: int, image_h: int, scale: float) -> tuple[int, int]:
-    """Choose H3-aligned dimensions near the scaled area without stretching refs."""
-    multiple = h3.CANVAS_MULTIPLE
-    scaled_w = max(float(multiple), image_w * scale)
-    scaled_h = max(float(multiple), image_h * scale)
-    target_area = scaled_w * scaled_h
-    aspect = image_w / max(1, image_h)
-    center_h_units = max(1, round(scaled_h / multiple))
-    best = None
-
-    for h_units in range(
-        max(1, center_h_units - REFERENCE_SIZE_SEARCH_RADIUS),
-        center_h_units + REFERENCE_SIZE_SEARCH_RADIUS + 1,
-    ):
-        ideal_w_units = h_units * aspect
-        min_w_units = max(1, math.floor(ideal_w_units) - 2)
-        max_w_units = max(min_w_units, math.ceil(ideal_w_units) + 2)
-        for w_units in range(min_w_units, max_w_units + 1):
-            target_w = w_units * multiple
-            target_h = h_units * multiple
-            ratio_error = abs((target_w / target_h) / aspect - 1.0)
-            area_error = abs((target_w * target_h) / target_area - 1.0)
-            score = ratio_error * 20.0 + area_error
-            candidate = (score, ratio_error, area_error, target_w, target_h)
-            if best is None or candidate < best:
-                best = candidate
-
-    return best[3], best[4]
 _PROMPT_OPTIMIZER_CONFIG_LOCK = threading.RLock()
 REFERENCE_PLACEHOLDER_RE = re.compile(r"__MINIMAX_H3_REF_(\d+)__")
 UNRESOLVED_REFERENCE_RE = re.compile(r"__MINIMAX_H3_UNRESOLVED_REF_[^_]+__")
@@ -880,6 +891,12 @@ def _normalize_prompt_optimizer_config(
     read_media = source.get("read_media", False)
     if isinstance(read_media, str):
         read_media = read_media.strip().lower() in {"1", "true", "yes", "on"}
+    # Ryan H3 Agent Skill 模式开关：默认单 Skill（与原 H3 Agent 节点一致）
+    ryan_h3_dual_skill = source.get("ryan_h3_dual_skill")
+    if ryan_h3_dual_skill is None:
+        ryan_h3_dual_skill = previous.get("ryan_h3_dual_skill", False)
+    if isinstance(ryan_h3_dual_skill, str):
+        ryan_h3_dual_skill = ryan_h3_dual_skill.strip().lower() in {"1", "true", "yes", "on"}
     return {
         "version": PROMPT_OPTIMIZER_CONFIG_VERSION,
         "active_provider": active_provider,
@@ -887,6 +904,7 @@ def _normalize_prompt_optimizer_config(
         "active_scheme": active_scheme,
         "custom_schemes": custom_schemes,
         "read_media": bool(read_media),
+        "ryan_h3_dual_skill": bool(ryan_h3_dual_skill),
     }
 
 
@@ -910,6 +928,16 @@ def _public_prompt_optimizer_schemes(value: Mapping[str, Any]) -> list[dict[str,
     manifest = _prompt_guide_manifest()
     general = manifest.get("general") if isinstance(manifest.get("general"), Mapping) else {}
     schemes: list[dict[str, Any]] = []
+    # Ryan ACP Agent scheme (only when Ryan_Comfy_Utils is installed)
+    if _RYAN_ACP_AVAILABLE:
+        schemes.append({
+            "id": "ryan_h3_agent",
+            "name": "Ryan H3 Agent",
+            "name_zh": "Ryan H3 智能体",
+            "prompt": "",
+            "editable": False,
+            "is_acp_agent": True,
+        })
     for item in manifest.get("scene_guides", []) if isinstance(manifest.get("scene_guides"), list) else []:
         if not isinstance(item, Mapping) or not item.get("id"):
             continue
@@ -1500,13 +1528,18 @@ def _optimizer_asset_path(asset: Mapping[str, Any]) -> str | None:
 
 
 def _optimizer_reference_short_edge(value: Any) -> int:
-    """Resolve the node's reference-image-size selector to a supported edge."""
-    legacy_short_edges = {"match": 480, "1k": 1024, "1.5k": 1088, "2k": 1088, "original": 1088}
+    """Cap prompt-optimizer JPEGs. Generation sizing stays on match/max."""
+    raw = str(value or "").strip().lower()
+    if raw in {REF_IMAGE_MATCH, ""}:
+        return OPTIMIZER_SHORT_EDGE_DEFAULT
+    if raw == REF_IMAGE_MAX:
+        return int(getattr(h3, "REF_IMAGE_SHORT_EDGE", 2048))
+    legacy_short_edges = {"1k": 1024, "1.5k": 1088, "2k": 1088, "original": 1088}
     try:
-        short_edge = int(str(value or REF_IMAGE_DEFAULT))
+        short_edge = int(raw)
     except (TypeError, ValueError):
-        short_edge = legacy_short_edges.get(str(value or "").strip().lower(), int(REF_IMAGE_DEFAULT))
-    allowed = tuple(int(item) for item in REFERENCE_SHORT_EDGES if str(item).isdigit())
+        short_edge = legacy_short_edges.get(raw, OPTIMIZER_SHORT_EDGE_DEFAULT)
+    allowed = OPTIMIZER_SHORT_EDGES
     return short_edge if short_edge in allowed else min(allowed, key=lambda item: abs(item - short_edge))
 
 
@@ -1602,8 +1635,25 @@ def _optimizer_media_parts(
     return parts
 
 
+def _media_slot_payload(kwargs: Mapping[str, Any], media_type: str, ordinal: int) -> Any:
+    wired = kwargs.get(f"{media_type}_{ordinal}")
+    if wired is not None and not (isinstance(wired, str) and not str(wired).strip()):
+        return wired
+    gallery = str(kwargs.get(f"gallery_{media_type}_{ordinal}") or "").strip()
+    return gallery or None
+
+
 def _media_counts_from_kwargs(kwargs: Mapping[str, Any]) -> dict[str, int]:
     counts = {"image": 0, "video": 0, "audio": 0}
+    named = False
+    for media_type, ordinal in MEDIA_SLOT_SPECS:
+        payload = _media_slot_payload(kwargs, media_type, ordinal)
+        if payload is None:
+            continue
+        named = True
+        counts[media_type] += 1
+    if named:
+        return counts
     for index in range(1, MAX_MEDIA + 1):
         kind = str(kwargs.get(f"media_type_{index}") or "").lower()
         if kind in counts and kwargs.get(f"media_{index}") is not None:
@@ -1686,6 +1736,28 @@ def _optimizer_scheme(settings: Mapping[str, Any], requested: Any = None) -> tup
 def _optimizer_resources_from_kwargs(kwargs: Mapping[str, Any]) -> list[dict[str, Any]]:
     resources: list[dict[str, Any]] = []
     counts = {"image": 0, "video": 0, "audio": 0}
+    named = False
+    for media_type, ordinal in MEDIA_SLOT_SPECS:
+        filename = str(kwargs.get(f"gallery_{media_type}_{ordinal}") or "").strip().replace("\\", "/")
+        if not filename:
+            wired = kwargs.get(f"{media_type}_{ordinal}")
+            if isinstance(wired, str) and wired.strip():
+                filename = wired.strip().replace("\\", "/")
+        if not filename:
+            if _media_slot_payload(kwargs, media_type, ordinal) is not None:
+                named = True
+            continue
+        named = True
+        counts[media_type] += 1
+        resources.append({
+            "type": media_type,
+            "tag": {"image": "Picture", "video": "Video", "audio": "Audio"}[media_type]
+            + f" {counts[media_type]}",
+            "name": filename.rsplit("/", 1)[-1],
+            "asset": {"filename": filename, "subfolder": "", "storage": "input"},
+        })
+    if named:
+        return resources
     for index in range(1, MAX_MEDIA + 1):
         filename = str(kwargs.get(f"media_{index}") or "").strip().replace("\\", "/")
         media_type = str(kwargs.get(f"media_type_{index}") or "").strip().lower()
@@ -1700,6 +1772,70 @@ def _optimizer_resources_from_kwargs(kwargs: Mapping[str, Any]) -> list[dict[str
             "asset": {"filename": filename, "subfolder": "", "storage": "input"},
         })
     return resources
+
+
+def _run_ryan_h3_agent(
+    prompt: str,
+    mode: str,
+    seconds: float,
+    resources: list[Mapping[str, Any]] | None,
+    provider: Mapping[str, Any],
+    reference_short_edge: Any = REF_IMAGE_DEFAULT,
+    use_dual_skill: bool = False,
+) -> tuple[str, str, str]:
+    """调用 Ryan ACP Agent 完成提示词优化。"""
+    if _ryan_h3_agent is None:
+        raise RuntimeError("Ryan_Comfy_Utils 未安装或加载失败")
+
+    media_resources: list[dict[str, str]] = []
+    for res in (resources or []):
+        if not isinstance(res, Mapping):
+            continue
+        asset = res.get("asset") if isinstance(res.get("asset"), Mapping) else {}
+        # ACP copies files by absolute path. annotated_filepath() returns a
+        # bare filename for unannotated uploads, which later fails as CWD-relative.
+        full_path = _optimizer_asset_path(asset)
+        if not full_path:
+            filename = str(asset.get("filename") or "").strip()
+            if filename:
+                try:
+                    candidate = folder_paths.get_annotated_filepath(filename)
+                except Exception:
+                    candidate = ""
+                if candidate and os.path.isfile(candidate):
+                    full_path = os.path.realpath(candidate)
+        if not full_path:
+            continue
+        media_resources.append({
+            "type": str(res.get("type") or "image"),
+            "path": str(full_path),
+            "role": str(res.get("role") or ""),
+            "tag": str(res.get("tag") or ""),
+        })
+
+    api_key = str(provider.get("api_key") or "")
+    api_url = str(provider.get("api_url") or "")
+    api_format = str(provider.get("api_format") or "openai").lower()
+    model = str(provider.get("_requested_model") or provider.get("llm_model") or "").strip()
+
+    result = _ryan_h3_agent(
+        user_prompt=prompt,
+        generation_mode=str(mode or MODE_IMAGE),
+        task_relation="无",
+        media_resources=media_resources,
+        duration_seconds=float(seconds),
+        aspect_ratio="",
+        ref_image_short_edge=_optimizer_reference_short_edge(reference_short_edge),
+        api_url=api_url,
+        api_key=api_key,
+        api_format=api_format,
+        model=model,
+        temperature=float(provider.get("temperature", 0.7)),
+        max_tokens=int(provider.get("max_tokens", 4096)),
+        top_p=float(provider.get("top_p", 0.9)),
+        use_dual_skill=use_dual_skill,
+    )
+    return result, str(provider.get("id") or ""), model
 
 
 def _run_configured_prompt_optimizer(
@@ -1717,6 +1853,18 @@ def _run_configured_prompt_optimizer(
     provider = _active_optimizer_provider(config, service_model)
     if not provider:
         raise ValueError("The selected prompt optimization service is disabled or no longer exists")
+
+    # Ryan ACP Agent routing: divert when user selected ryan_h3_agent scheme
+    if scene_guide == "ryan_h3_agent" and _RYAN_ACP_AVAILABLE:
+        return _run_ryan_h3_agent(
+            prompt=prompt,
+            mode=mode,
+            seconds=seconds,
+            resources=resources,
+            provider=provider,
+            reference_short_edge=reference_short_edge,
+            use_dual_skill=bool(config.get("ryan_h3_dual_skill", False)),
+        )
 
     api_key = str(provider.get("api_key") or "")
     api_url = str(provider.get("api_url") or "")
@@ -2766,6 +2914,61 @@ class FeiHouEasyH3RemixLoader:
         ),)
 
 
+class FeiHouEasyH3UnifiedLoader:
+    CATEGORY = "FeiHou Easy H3"
+    FUNCTION = "load"
+    RETURN_TYPES = ("MINIMAX_H3_BUNDLE",)
+    RETURN_NAMES = ("h3_bundle",)
+    DESCRIPTION = "Load one hybrid MiniMax H3 transformer for both FL2VA and REF2VA, plus the text encoder and both AV VAEs."
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model": (_all_weight_choices(("diffusion_models", "unet", "unet_gguf"), "minimax_h3.safetensors"),),
+                "text_encoder": (_clip_choices(),),
+                "video_vae": (_vae_choices(("minimax_h3_video_vae",), "minimax_h3_video_vae_fp16.safetensors"),),
+                "audio_vae": (_vae_choices(("minimax_h3_audio_vae",), "minimax_h3_audio_vae_fp32.safetensors"),),
+            },
+            "optional": {
+                "lora_stack": (LORA_STACK_TYPE,),
+                "video_vae_override": ("VAE",),
+            },
+        }
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        if kwargs.get("video_vae_override") is not None:
+            return float("nan")
+        base = "|".join(str(kwargs.get(key, "")) for key in ("model", "text_encoder", "video_vae", "audio_vae"))
+        return base + "|" + json.dumps(_normalize_lora_stack(kwargs.get("lora_stack")), ensure_ascii=False)
+
+    def load(self, model, text_encoder, video_vae, audio_vae, lora_stack=None, video_vae_override=None):
+        if _is_none_model(model):
+            raise ValueError("Select a MiniMax H3 transformer model.")
+        clip = _load_text_encoder(text_encoder)
+        if video_vae_override is not None:
+            video_vae_obj = video_vae_override
+            video_vae_name = "connected"
+        else:
+            video_vae_obj, = nodes.VAELoader().load_vae(video_vae)
+            video_vae_name = video_vae
+        audio_vae_obj, = nodes.VAELoader().load_vae(audio_vae)
+        # Hybrid checkpoints serve both generation paths. Store the same file
+        # on both bundle slots so mode switches do not require a second picker.
+        return (MiniMaxH3Bundle(
+            fl2va_model_name=model,
+            ref2va_model_name=model,
+            clip_name=text_encoder,
+            video_vae_name=video_vae_name,
+            audio_vae_name=audio_vae,
+            clip=clip,
+            video_vae=video_vae_obj,
+            audio_vae=audio_vae_obj,
+            lora_stack=_normalize_lora_stack(lora_stack),
+        ),)
+
+
 class FeiHouEasyH3ModelAdapter:
     CATEGORY = "FeiHou Easy H3"
     FUNCTION = "assemble"
@@ -2833,12 +3036,20 @@ def _embedded_media_path(filename: str) -> str:
     return folder_paths.get_annotated_filepath(value)
 
 
+def _load_image_file(filename: str):
+    path = _embedded_media_path(filename)
+    img = node_helpers.pillow(Image.open, path)
+    img = node_helpers.pillow(ImageOps.exif_transpose, img)
+    rgb = img.convert("RGB")
+    array = np.array(rgb).astype(np.float32) / 255.0
+    return torch.from_numpy(array)[None, ...]
+
+
 def _load_embedded_media(filename: str, media_type: str) -> Any:
     """Load an embedded gallery selection into ComfyUI's native media type."""
-    path = _embedded_media_path(filename)
     if media_type == "image":
-        image, _mask = nodes.LoadImage().load_image(filename)
-        return image
+        return _load_image_file(filename)
+    path = _embedded_media_path(filename)
     if media_type == "video":
         return InputImpl.VideoFromFile(path)
     if media_type == "audio":
@@ -3053,11 +3264,55 @@ def _align_canvas_dimension(value: float) -> int:
     return max(h3.CANVAS_MULTIPLE, round(float(value) / h3.CANVAS_MULTIPLE) * h3.CANVAS_MULTIPLE)
 
 
+def _normalize_ref_image_size(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == REF_IMAGE_MAX or raw in {"1k", "1.5k", "2k", "original"}:
+        return REF_IMAGE_MAX
+    if raw == REF_IMAGE_MATCH:
+        return REF_IMAGE_MATCH
+    try:
+        short_edge = int(raw)
+    except (TypeError, ValueError):
+        return REF_IMAGE_DEFAULT
+    allowed = {int(item) for item in REFERENCE_SHORT_EDGES if str(item).isdigit()}
+    if short_edge in allowed:
+        return str(short_edge)
+    return min(allowed, key=lambda item: abs(item - short_edge))
+
+
+def _normalize_resolution(resolution: str) -> str:
+    raw = str(resolution or "").strip()
+    if not raw:
+        return RESOLUTION_DEFAULT
+    if raw == RESOLUTION_CUSTOM:
+        return RESOLUTION_CUSTOM
+    if raw in RESOLUTION_MEGAPIXELS:
+        return raw
+    alias = RESOLUTION_ALIASES.get(raw) or RESOLUTION_ALIASES.get(raw.upper())
+    if alias:
+        return alias
+    compact = raw.lower().replace(" ", "").replace("megapixels", "").replace("megapixel", "").replace("mp", "")
+    if compact in RESOLUTION_MEGAPIXELS:
+        return compact
+    alias = RESOLUTION_ALIASES.get(compact.upper())
+    if alias:
+        return alias
+    try:
+        value = float(compact)
+    except ValueError:
+        return RESOLUTION_DEFAULT
+    for label, megapixels in RESOLUTION_MEGAPIXELS.items():
+        if abs(megapixels - value) < 1e-9:
+            return label
+    return RESOLUTION_DEFAULT
+
+
 def _canvas_dimensions(resolution: str, aspect_ratio: str, custom_width: int, custom_height: int) -> tuple[int, int]:
-    if str(resolution) == RESOLUTION_CUSTOM:
+    normalized = _normalize_resolution(resolution)
+    if normalized == RESOLUTION_CUSTOM:
         return _align_canvas_dimension(custom_width), _align_canvas_dimension(custom_height)
 
-    megapixels = RESOLUTION_MEGAPIXELS.get(str(resolution), RESOLUTION_MEGAPIXELS[RESOLUTION_480])
+    megapixels = RESOLUTION_MEGAPIXELS.get(normalized, RESOLUTION_MEGAPIXELS[RESOLUTION_DEFAULT])
     ratio_w, ratio_h = ASPECT_RATIOS.get(str(aspect_ratio), ASPECT_RATIOS[ASPECT_WIDESCREEN])
     total_pixels = megapixels * 1024 * 1024
     scale = math.sqrt(total_pixels / (ratio_w * ratio_h))
@@ -3095,7 +3350,6 @@ def _empty_image_conditioning(bundle, prompt, width, height, length, first_frame
         })
     return conditioning, latent
 
-
 def _reference_conditioning(bundle, prompt, width, height, length, ref_image_size, items: list[_MediaInput], *, text_only: bool = False):
     latent, frame_count = h3._empty_av_latent(width, height, length)
     ref_items = []
@@ -3127,6 +3381,13 @@ def _reference_conditioning(bundle, prompt, width, height, length, ref_image_siz
             except ValueError:
                 short_edge = int(getattr(h3, "REF_IMAGE_SHORT_EDGE", 2048))
             scale = min(1.0, short_edge / max(1, min(image_w, image_h)))
+        size_mode = _normalize_ref_image_size(ref_image_size)
+        if size_mode == REF_IMAGE_MATCH:
+            scale = min(1.0, math.sqrt((width * height) / max(1, image_w * image_h)))
+        elif size_mode == REF_IMAGE_MAX:
+            scale = min(1.0, float(getattr(h3, "REF_IMAGE_SHORT_EDGE", 2048)) / max(1, min(image_w, image_h)))
+        else:
+            scale = min(1.0, int(size_mode) / max(1, min(image_w, image_h)))
         target_w = max(h3.CANVAS_MULTIPLE, round(image_w * scale / h3.CANVAS_MULTIPLE) * h3.CANVAS_MULTIPLE)
         target_h = max(h3.CANVAS_MULTIPLE, round(image_h * scale / h3.CANVAS_MULTIPLE) * h3.CANVAS_MULTIPLE)
         resized = h3._resize(image[:1], target_w, target_h, "disabled")
@@ -3243,6 +3504,12 @@ class FeiHouEasyH3:
         # whether the backend is ever called.
         prompt_provider_values = prompt_providers if "" in prompt_providers else ["", *prompt_providers]
         optional = {}
+        hidden = {}
+        for media_type, ordinal in MEDIA_SLOT_SPECS:
+            hidden[f"{media_type}_{ordinal}"] = (
+                {"image": "IMAGE", "video": "VIDEO", "audio": "AUDIO"}[media_type],
+            )
+            hidden[f"gallery_{media_type}_{ordinal}"] = ("STRING", {"default": ""})
         for index in range(1, MAX_MEDIA + 1):
             # Transport-only strings populated by the embedded-media frontend.
             # They remain declared for prompt validation, but are stripped from
@@ -3259,7 +3526,7 @@ class FeiHouEasyH3:
                 "h3_bundle": ("MINIMAX_H3_BUNDLE",),
                 "mode": ([MODE_IMAGE, MODE_REFERENCE], {"default": MODE_IMAGE}),
                 "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True, "default": ""}),
-                "resolution": (list(RESOLUTIONS), {"default": RESOLUTION_480}),
+                "resolution": (list(RESOLUTIONS), {"default": RESOLUTION_DEFAULT}),
                 "aspect_ratio": (list(ASPECT_RATIOS), {"default": ASPECT_WIDESCREEN}),
                 "width": ("INT", {"default": 1344, "min": 32, "max": nodes.MAX_RESOLUTION, "step": 32}),
                 "height": ("INT", {"default": 768, "min": 32, "max": nodes.MAX_RESOLUTION, "step": 32}),
@@ -3268,7 +3535,7 @@ class FeiHouEasyH3:
                 "advanced": ("BOOLEAN", {"default": False}),
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0, "step": 1.0}),
                 "keyframe_role": ([KEYFRAME_FIRST, KEYFRAME_LAST], {"default": KEYFRAME_FIRST}),
-                "ref_image_size": (list(REFERENCE_SHORT_EDGES), {"default": REF_IMAGE_DEFAULT}),
+                "ref_image_size": (list(REF_IMAGE_SIZES), {"default": REF_IMAGE_DEFAULT}),
                 "reference_mention_mode": ([REFERENCE_MENTION_FILENAME, REFERENCE_MENTION_INDEX], {"default": REFERENCE_MENTION_INDEX}),
                 "prompt_optimizer_enabled": ("BOOLEAN", {"default": False}),
                 "prompt_optimizer_provider": (prompt_provider_values, {"default": prompt_providers[0]}),
@@ -3279,17 +3546,22 @@ class FeiHouEasyH3:
                 "reference_text_only": ("BOOLEAN", {"default": False, "tooltip": "Reference conditioning only: keep multimodal text encoding but skip all reference VAE latents. Changes fidelity; reference audio waveform conditioning is lost. Does not change one-pass image/first-last-frame conditioning."}),
             },
             "optional": optional,
+            "hidden": hidden,
         }
 
     @classmethod
-    def VALIDATE_INPUTS(cls, prompt_optimizer_provider, prompt_optimizer_scene_guide):
-        """Allow saved dynamic optimizer selections to survive settings changes.
+    def VALIDATE_INPUTS(cls, prompt_optimizer_provider, prompt_optimizer_scene_guide, resolution=None, ref_image_size=None):
+        """Allow saved dynamic optimizer selections and legacy combo labels.
 
         ComfyUI validates combo values before ``generate`` can inspect the
         optimizer switch.  These two lists are populated from user settings,
         so a workflow saved with a removed/renamed API model must still run
         when prompt optimization is off.  When it is on, the optimizer backend
         performs its own current-service validation with a useful error.
+
+        Resolution used to be labeled as 480P/720P/1080P.  Reference image size
+        used short-edge pixels.  Accept those saved values here; ``generate``
+        maps them to official megapixel presets and native match/max sizing.
         """
         return True
 
@@ -3321,6 +3593,16 @@ class FeiHouEasyH3:
     @staticmethod
     def _collect_media(kwargs: dict, media_count=MAX_MEDIA) -> list[_MediaInput]:
         items = []
+        named = False
+        for media_type, ordinal in MEDIA_SLOT_SPECS:
+            payload = _media_slot_payload(kwargs, media_type, ordinal)
+            if payload is None:
+                continue
+            named = True
+            value = _load_embedded_media(payload, media_type) if isinstance(payload, str) else payload
+            items.append(_MediaInput(len(items) + 1, media_type, value))
+        if named:
+            return items
         for index in range(1, media_count + 1):
             value = kwargs.get(f"media_{index}")
             if value is None or (isinstance(value, str) and not value.strip()):
@@ -3391,6 +3673,8 @@ class FeiHouEasyH3:
         keyframe_role = KEYFRAME_LAST if str(keyframe_role) == KEYFRAME_LAST else KEYFRAME_FIRST
         width, height = _canvas_dimensions(resolution, aspect_ratio, width, height)
         items = cls._collect_media(kwargs, len(production_shot["media"]) if production_shot is not None else MAX_MEDIA)
+        if mode != MODE_REFERENCE:
+            items = [item for item in items if item.media_type == "image"][:2]
         # Decode/crop each video once; duration and conditioning share these frames.
         items = [_MediaInput(item.input_index, item.media_type,
                              _trim_reference_video(item.value, item.audio_trim), "")
@@ -3437,7 +3721,6 @@ class FeiHouEasyH3:
                 model_label = "REF2VA" if second_kind == "ref2va" else "FL2VA"
                 raise ValueError(f"A custom second-pass model is enabled, but no {model_label} second-pass model is selected. Select a model or disable the custom second-pass model.")
             second_sampling_active = True
-
         if mode == MODE_REFERENCE and items:
             if production_shot is None and len(items) > MAX_MEDIA:
                 raise ValueError("Reference mode accepts at most fifteen media resources")
@@ -3557,7 +3840,6 @@ class FeiHouEasyH3DurationCrop:
     RETURN_TYPES = ("IMAGE", "FLOAT", "AUDIO")
     RETURN_NAMES = ("images", "fps", "audio")
     DESCRIPTION = "Uses the Easy H3 duration-control output to restore the exact Audio 1 duration. Disabled control passes media through unchanged."
-
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -3590,6 +3872,31 @@ class FeiHouEasyH3DurationCrop:
             frame_indices = positions.round().to(dtype=torch.long)
             images = images.index_select(0, frame_indices)
         return images, float(target_frames / target_seconds), audio
+
+class FeiHouEasyH3SecondPassAdapter:
+    CATEGORY = "FeiHou Easy H3"
+    FUNCTION = "adapt"
+    RETURN_TYPES = ("CONDITIONING", "LATENT")
+    RETURN_NAMES = ("positive", "latent")
+    DESCRIPTION = (
+        "Adapt H3 conditioning for a second pass after latent upscale. "
+        "Default mode resizes first/last-frame keyframe latents to the target canvas; "
+        "the other mode drops those keyframes. Reference blocks are never rewritten."
+    )
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "positive": ("CONDITIONING",),
+                "latent": ("LATENT",),
+                "mode": (list(SECOND_PASS_MODES), {"default": DEFAULT_MODE}),
+            },
+        }
+
+    @staticmethod
+    def adapt(positive, latent, mode=DEFAULT_MODE):
+        return adapt_second_pass(positive, latent, mode)
 
 
 class FeiHouEasyH3PromptPreview:
@@ -3636,9 +3943,11 @@ NODE_CLASS_MAPPINGS = {
     "FeiHouEasyH3Resolution": FeiHouEasyH3Resolution,
     "FeiHouEasyH3LoraStack": FeiHouEasyH3LoraStack,
     "FeiHouEasyH3Loader": FeiHouEasyH3Loader,
+    "FeiHouEasyH3UnifiedLoader": FeiHouEasyH3UnifiedLoader,
     "FeiHouEasyH3ModelAdapter": FeiHouEasyH3ModelAdapter,
     "FeiHouEasyH3": FeiHouEasyH3,
     "FeiHouEasyH3Output": FeiHouEasyH3Output,
     "FeiHouEasyH3DurationCrop": FeiHouEasyH3DurationCrop,
+    "FeiHouEasyH3SecondPassAdapter": FeiHouEasyH3SecondPassAdapter,
     "FeiHouEasyH3PromptPreview": FeiHouEasyH3PromptPreview,
 }

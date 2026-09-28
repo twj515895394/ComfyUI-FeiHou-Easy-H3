@@ -9,14 +9,16 @@
 - 9 个图片槽位，固定 3 × 3 九宫格；
 - 3 个视频槽位；
 - 3 个独立音频槽位；
-- 点击槽位选择文件，也可以把文件直接拖入槽位；
-- 图片和视频在节点内预览，音频显示文件名；
+- 点击槽位选择文件，也可以把文件直接拖入槽位；每个序号左侧还有对应类型接入点，可直接接 `Load Image` / `Load Video` / `Load Audio` 或处理后的图/视频/音频；
+- 同一槽位同时有上传和连线时，优先使用外部连线；
 - 已上传文件随工作流记录，重新打开工作流后仍可恢复；
 - 参考模式继续支持在提示词里输入 `@` 选择 `<Picture i>`、`<Video i>`、`<Audio i>`；
 - 视频原有音轨仍与该视频自动配对，3 个音频槽位作为独立参考音频；
 - 默认 24 FPS、10 秒；参考图尺寸可选短边 480、544、640、736、768、832、928、1024、1088；
 - 高级选项提供“强制卸载（含采样后缓存回收）”和可选“完整低显存分块（实验）”：前者在采样器结束、VAE 解码前回收未使用的缓存，后者对 H3 的 QKV、注意力、MLP/SwiGLU 和输出头执行完整分块；启用后不要再串联 `ModelAttentionBackend / comfy kitchen attention`；
+- 默认 24 FPS、10 秒；参考图尺寸与官方节点一致，可选 `match`（按生成分辨率缩放）或 `max`（短边最多 2048）；
 - 提示词优化支持智谱、xFlow-API 聚合、Ollama、阿里云、DeepSeek 和自定义 OpenAI/Gemini/Ollama 兼容 API；
+
 - 内置提示词方案之外，还可创建、编辑和选择自定义方案。
 
 ## 节点
@@ -25,9 +27,12 @@
 
 - `加载LoRA（旁路，仅模型）（用于调试）`：完全沿用 `FeiHou LoRA Stack (Merge/Extract)` 的原生画布堆栈样式，可动态添加、启停、排序多个 LoRA；
 - `FeiHou Easy H3 Loader`：从左侧接收 LoRA 堆栈，并在内部加载 FL2VA/REF2VA 模型和应用 LoRA，同时加载文本编码器、视频 VAE 和音频 VAE；
+- `FeiHou Easy H3 混合加载器`：只选一个同时支持 FL2VA 和 REF2VA 的混合模型，其余输入与原加载器相同；
 - `ComfyUI-FeiHou-Easy-H3`：主生成节点及内嵌媒体面板；
+
 - `FeiHou Easy H3 Model Adapter`：接入外部标准 ComfyUI 模型加载链；
 - `FeiHou Easy H3 Output`：拆出 Conditioning、Latent、视频 VAE、音频 VAE、FPS 和最终提示词；
+- `FeiHou Easy H3 二采条件适配`：接在 3D latent 放大之后、二采 Sampler 之前。`mode` 默认把首/尾帧 keyframe 拉到目标画布，可选丢掉首帧约束；不改参考生的 refs。文生无 keyframe 时为空操作；
 - `FeiHou Easy H3 提示词预览`：显示 H3 Context 携带的最终扩写 / 反推提示词。
 
 节点分类为 `FeiHou Easy H3`，类名使用独立的 `FeiHouEasyH3*` 前缀，可与原版 `ComfyUI-MiniMaxH3-Easy` 同时安装，不会发生节点 ID 或提示词优化路由冲突。
@@ -38,7 +43,7 @@
 2. 更新到包含官方 MiniMax H3 节点的新版 ComfyUI。
 3. 重启 ComfyUI，并在 `FeiHou Easy H3` 分类中添加节点。
 4. 把“加载LoRA（旁路，仅模型）（用于调试）”放在 Loader 左侧，将它的 `lora_stack` 输出接到 Loader 左侧的“LoRA 堆栈”输入；Loader 再连接主节点。LoRA 不再串联到主节点的 `model` 输出链路上。
-5. 选择“参考生成视频”模式后，九宫格、3 个视频槽和 3 个音频槽都会启用。
+5. 选择“参考生成视频”模式后，九宫格、3 个视频槽和 3 个音频槽都会启用。每个序号左侧的接入点可接处理后的 `IMAGE` / `VIDEO` / `AUDIO`；未接线时仍可点击或拖入文件。
 
 提示词配置位于 ComfyUI“设置”左侧的 `🐵Easy H3` 独立插件分组。API 设置和“提示词优化规则”直接显示在右侧设置页，不再打开二级窗口；Base URL 可修改，API Key 粘贴后自动保存，预置服务不附带 Key 或模型。主节点关闭“高级选项”时不显示、也不执行 API 和提示词方案；打开后先选择已配置的 API 接口，再选择方案。API 未启用时方案不生效。API 密钥保存在 ComfyUI 用户目录下的本插件配置文件中，不随工作流导出。
 

@@ -7,6 +7,8 @@ from .nodes import (
     FeiHouEasyH3LoraStack,
     FeiHouEasyH3Output,
     FeiHouEasyH3DurationCrop,
+    FeiHouEasyH3UnifiedLoader,
+    FeiHouEasyH3SecondPassAdapter,
     FeiHouEasyH3PromptPreview,
 )
 
@@ -24,6 +26,8 @@ NODE_CLASS_MAPPINGS = {
     "FeiHouEasyH3": FeiHouEasyH3,
     "FeiHouEasyH3Output": FeiHouEasyH3Output,
     "FeiHouEasyH3DurationCrop": FeiHouEasyH3DurationCrop,
+    "FeiHouEasyH3UnifiedLoader": FeiHouEasyH3UnifiedLoader,
+    "FeiHouEasyH3SecondPassAdapter": FeiHouEasyH3SecondPassAdapter,
     "FeiHouEasyH3PromptPreview": FeiHouEasyH3PromptPreview,
 }
 
@@ -38,6 +42,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "FeiHouEasyH3": "ComfyUI-FeiHou-Easy-H3",
     "FeiHouEasyH3Output": "FeiHou Easy H3 Output",
     "FeiHouEasyH3DurationCrop": "FeiHou Easy H3 Digital Human/MV Duration Crop",
+    "FeiHouEasyH3UnifiedLoader": "FeiHou Easy H3 Hybrid Loader",
+    "FeiHouEasyH3SecondPassAdapter": "FeiHou Easy H3 Second-pass Adapter",
     "FeiHouEasyH3PromptPreview": "FeiHou Easy H3 Prompt Preview",
 }
 

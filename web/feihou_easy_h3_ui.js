@@ -6,6 +6,7 @@ import { api } from "../../scripts/api.js";
 const NODE_CLASS = "FeiHouEasyH3";
 const LOADER_CLASS = "FeiHouEasyH3Loader";
 const REMIX_LOADER_CLASS = "FeiHouEasyH3RemixLoader";
+const UNIFIED_LOADER_CLASS = "FeiHouEasyH3UnifiedLoader";
 const ADAPTER_CLASS = "FeiHouEasyH3ModelAdapter";
 const OUTPUT_CLASS = "FeiHouEasyH3Output";
 const PROMPT_PREVIEW_CLASS = "FeiHouEasyH3PromptPreview";
@@ -13,6 +14,9 @@ const LINKS_PROP = "minimax_h3_virtual_media_links";
 const EMBEDDED_MEDIA_PROP = "feihou_h3_embedded_media";
 const PROMPT_DOC_PROP = "minimax_h3_prompt_reference_doc";
 const PROMPT_VIEW_PROP = "minimax_h3_prompt_view_mode";
+const PROMPT_HEIGHT_PROP = "minimax_h3_prompt_editor_height";
+const PROMPT_EDITOR_MIN_HEIGHT = 96;
+const PROMPT_EDITOR_DEFAULT_HEIGHT = 180;
 const PROMPT_OPTIMIZER_SETTINGS_ENDPOINT = "/feihou_easy_h3/prompt_optimizer_settings";
 const PROMPT_OPTIMIZER_SETTINGS_DEFAULTS = Object.freeze({
     active_provider: "zhipu",
@@ -46,9 +50,13 @@ const MODE_IMAGE = "image";
 const MODE_REFERENCE = "reference";
 const KEYFRAME_FIRST = "first";
 const RESOLUTION_CUSTOM = "custom";
-const REF_IMAGE_DEFAULT = "480";
 const REF_IMAGE_MATCH = "match";
+const RESOLUTION_DEFAULT = "0.4";
+const MEGAPIXEL_PRESETS = ["0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.98", "1.0", "1.2", "1.5", "1.8", "2.0"];
+const REF_IMAGE_MAX = "max";
 const REF_IMAGE_SHORT_EDGES = ["480", "544", "640", "736", "768", "832", "928", "1024", "1088"];
+const REF_IMAGE_DEFAULT = "480";
+const REF_IMAGE_SIZES = [REF_IMAGE_MATCH, REF_IMAGE_MAX, ...REF_IMAGE_SHORT_EDGES];
 const MAX_MEDIA = 15;
 const MIN_SECONDS = 0.2;
 const MAX_SECONDS = 30;
@@ -108,12 +116,13 @@ const TEXT = {
     mainTitle: "ComfyUI-FeiHou-Easy-H3",
     loaderTitle: ZH_BROWSER ? "FeiHou Easy H3 \u52a0\u8f7d\u5668" : "FeiHou Easy H3 Loader",
     remixLoaderTitle: ZH_BROWSER ? "FeiHou Easy H3 Remix\u52a0\u8f7d\u5668" : "FeiHou Easy H3 Remix Loader",
+    unifiedLoaderTitle: ZH_BROWSER ? "FeiHou Easy H3 \u6df7\u5408\u52a0\u8f7d\u5668" : "FeiHou Easy H3 Hybrid Loader",
     adapterTitle: ZH_BROWSER ? "FeiHou Easy H3 \u6a21\u578b\u4e2d\u8f6c" : "FeiHou Easy H3 Model Bridge",
     outputTitle: ZH_BROWSER ? "FeiHou Easy H3 \u8f93\u51fa" : "FeiHou Easy H3 Output",
     category: "FeiHou Easy H3",
     mode: ZH_BROWSER ? "\u6a21\u5f0f" : "Mode",
     prompt: ZH_BROWSER ? "\u63d0\u793a\u8bcd" : "Prompt",
-    resolution: ZH_BROWSER ? "\u5206\u8fa8\u7387" : "Resolution",
+    resolution: "megapixels",
     aspectRatio: ZH_BROWSER ? "\u5bbd\u9ad8\u6bd4" : "Aspect ratio",
     width: ZH_BROWSER ? "\u5bbd\u5ea6" : "Width",
     height: ZH_BROWSER ? "\u9ad8\u5ea6" : "Height",
@@ -129,11 +138,12 @@ const TEXT = {
     promptOptimizerProvider: ZH_BROWSER ? "API \u670d\u52a1/\u6a21\u578b" : "API service/model",
     fps: ZH_BROWSER ? "\u5e27\u7387 (FPS)" : "Frame rate (FPS)",
     keyframeRole: ZH_BROWSER ? "\u9996\u5c3e\u5e27\u8bbe\u7f6e" : "First/last frame setup",
-    refImageSize: ZH_BROWSER ? "\u53c2\u8003\u56fe\u5c3a\u5bf8\uff08\u77ed\u8fb9\uff09" : "Reference image size (short edge)",
+    refImageSize: ZH_BROWSER ? "\u53c2\u8003\u56fe\u5c3a\u5bf8" : "Reference image size",
     referenceMentionMode: ZH_BROWSER ? "@\u5f15\u7528\u65b9\u5f0f" : "@ reference mode",
     mentionByFilename: ZH_BROWSER ? "\u6309\u6587\u4ef6\u540d" : "By filename",
     mentionByIndex: ZH_BROWSER ? "\u6309\u5e8f\u53f7" : "By index",
     bundle: ZH_BROWSER ? "H3 \u6a21\u578b\u7ec4\u5408" : "H3 model bundle",
+    transformerModel: ZH_BROWSER ? "\u6a21\u578b" : "Model",
     fl2vaModel: ZH_BROWSER ? "FL2VA \u6a21\u578b" : "FL2VA model",
     ref2vaModel: ZH_BROWSER ? "REF2VA \u6a21\u578b" : "REF2VA model",
     textEncoder: ZH_BROWSER ? "\u6587\u672c\u7f16\u7801\u5668" : "Text encoder",
@@ -173,6 +183,7 @@ const TEXT = {
     embeddedPick: ZH_BROWSER ? "\u70b9\u51fb\u6216\u62d6\u5165\u6587\u4ef6" : "Click or drop a file",
     embeddedReorder: ZH_BROWSER ? "\u6309\u4f4f\u5e76\u62d6\u52a8\u4ee5\u8c03\u6574\u987a\u5e8f" : "Drag to reorder",
     embeddedDisabled: ZH_BROWSER ? "\u56fe\u751f\u89c6\u9891\u6a21\u5f0f\u4ec5\u4f7f\u7528\u524d 2 \u5f20\u56fe" : "Image mode uses the first 2 images",
+    embeddedWired: ZH_BROWSER ? "\u5916\u90e8\u63a5\u5165" : "External input",
     embeddedUploading: ZH_BROWSER ? "\u4e0a\u4f20\u4e2d\u2026" : "Uploading\u2026",
 };
 const OPTION_DEFS = {
@@ -190,7 +201,12 @@ const OPTION_DEFS = {
         last: ZH_BROWSER ? "\u5c3e\u5e27\u4f18\u5148" : "Last frame priority",
     },
     ref_image_size: {
+        /*
         [REF_IMAGE_MATCH]: ZH_BROWSER ? "匹配生成分辨率" : "Match generation size",
+        ...Object.fromEntries(REF_IMAGE_SHORT_EDGES.map((value) => [value, value])),
+        */
+        [REF_IMAGE_MATCH]: ZH_BROWSER ? "\u5339\u914d\u751f\u6210\u5206\u8fa8\u7387" : "match",
+        [REF_IMAGE_MAX]: "max",
         ...Object.fromEntries(REF_IMAGE_SHORT_EDGES.map((value) => [value, value])),
     },
     reference_mention_mode: {
@@ -201,18 +217,8 @@ const OPTION_DEFS = {
         none: ZH_BROWSER ? "\u4ec5\u901a\u7528\u65b9\u6848" : "General only",
     },
     resolution: {
-        "360P": "360P",
-        "416P": "416P",
-        "480P": "480P",
-        "540P": "540P",
-        "640P": "640P",
-        "720P": "720P",
-        "768P": "768P",
-        "832P": "832P",
-        "928P": "928P",
-        "1024P": "1024P",
-        "1080P": "1080P",
-        [RESOLUTION_CUSTOM]: "Custom",
+        ...Object.fromEntries(MEGAPIXEL_PRESETS.map((value) => [value, value])),
+        [RESOLUTION_CUSTOM]: ZH_BROWSER ? "\u81ea\u5b9a\u4e49" : "Custom",
     },
     aspect_ratio: {
         "1:1": "1:1",
@@ -256,6 +262,28 @@ const OPTION_ALIASES = {
         "1.5k": "1088",
         "2k": "1088",
         original: "1088",
+        [REF_IMAGE_MATCH]: REF_IMAGE_MATCH,
+        [REF_IMAGE_MAX]: REF_IMAGE_MAX,
+        match: REF_IMAGE_MATCH,
+        max: REF_IMAGE_MAX,
+        "\u5339\u914d\u751f\u6210\u5206\u8fa8\u7387": REF_IMAGE_MATCH,
+        "Match generation size": REF_IMAGE_MATCH,
+        "480": REF_IMAGE_MATCH,
+        "544": REF_IMAGE_MATCH,
+        "640": REF_IMAGE_MATCH,
+        "736": REF_IMAGE_MATCH,
+        "768": REF_IMAGE_MATCH,
+        "832": REF_IMAGE_MATCH,
+        "928": REF_IMAGE_MATCH,
+        "1024": REF_IMAGE_MAX,
+        "1088": REF_IMAGE_MAX,
+        "1k": REF_IMAGE_MAX,
+        "1.5k": REF_IMAGE_MAX,
+        "2k": REF_IMAGE_MAX,
+        original: REF_IMAGE_MAX,
+        "\u77ed\u8fb9 480": REF_IMAGE_MATCH,
+        "Short edge 480": REF_IMAGE_MATCH,
+        ...Object.fromEntries(REF_IMAGE_SHORT_EDGES.map((value) => [value, value])),
     },
     reference_mention_mode: {
         filename: "filename",
@@ -264,6 +292,25 @@ const OPTION_ALIASES = {
         index: "index",
         "\u6309\u5e8f\u53f7": "index",
         "By index": "index",
+    },
+    resolution: {
+        ...Object.fromEntries(MEGAPIXEL_PRESETS.map((value) => [value, value])),
+        1: "1.0",
+        2: "2.0",
+        "360P": "0.2",
+        "416P": "0.3",
+        "480P": "0.4",
+        "540P": "0.5",
+        "640P": "0.7",
+        "720P": "0.9",
+        "768P": "1.0",
+        "832P": "1.2",
+        "928P": "1.5",
+        "1024P": "1.8",
+        "1080P": "2.0",
+        [RESOLUTION_CUSTOM]: RESOLUTION_CUSTOM,
+        "\u81ea\u5b9a\u4e49": RESOLUTION_CUSTOM,
+        Custom: RESOLUTION_CUSTOM,
     },
 };
 const COLOR_IMAGE = "#5aa9f0";
@@ -298,6 +345,8 @@ let nativeSearchSuppressStyle = null;
 let releaseCreateMenuLinkHold = null;
 let nativeThemeWatcherInstalled = false;
 let lastVueNodesMode = null;
+let lastDraggedOutput = null;
+
 
 function nodeMatchesClass(node, className, displayName, installedMarker) {
     if (!node) return false;
@@ -324,6 +373,10 @@ function isLoader(node) {
 
 function isRemixLoader(node) {
     return nodeMatchesClass(node, REMIX_LOADER_CLASS, TEXT.remixLoaderTitle, "__feihouStandardH3EasyRemixLoaderInstalled");
+}
+
+function isUnifiedLoader(node) {
+    return nodeMatchesClass(node, UNIFIED_LOADER_CLASS, TEXT.unifiedLoaderTitle, "__h3EasyUnifiedLoaderInstalled");
 }
 
 function isAdapter(node) {
@@ -464,6 +517,16 @@ function localizeNodeInstance(node) {
         for (const input of node.inputs || []) if (labels[input.name]) setLocalizedSlotLabel(input, labels[input.name]);
         return;
     }
+    if (isUnifiedLoader(node)) {
+        node.title = TEXT.unifiedLoaderTitle;
+        const labels = { lora_stack: "LoRA \u5806\u6808", model: TEXT.transformerModel, text_encoder: TEXT.textEncoder, video_vae: TEXT.videoVae, audio_vae: TEXT.audioVae, video_vae_override: "\u5916\u90e8\u89c6\u9891VAE" };
+        for (const widget of node.widgets || []) {
+            if (labels[widget.name]) widget.label = labels[widget.name];
+            if (widget.name === "model") localizeOptionalModelWidget(widget);
+        }
+        for (const input of node.inputs || []) if (labels[input.name]) setLocalizedSlotLabel(input, labels[input.name]);
+        return;
+    }
     if (isAdapter(node)) {
         node.title = TEXT.adapterTitle;
         const labels = { fl2va_model: TEXT.fl2vaModel, ref2va_model: TEXT.ref2vaModel, text_encoder: TEXT.textEncoder, video_vae: TEXT.videoVae, audio_vae: TEXT.audioVae };
@@ -502,6 +565,8 @@ function localizeNodeInstance(node) {
         if (input.name === "h3_bundle") setLocalizedSlotLabel(input, TEXT.bundle);
         if (input.name === "production_shot") setLocalizedSlotLabel(input, isChineseComfyLocale() ? "制作包分镜" : "Production shot");
         if (input.name === "media") setLocalizedSlotLabel(input, TEXT.inputMedia);
+        const parsed = parseMediaSlotName(input.name);
+        if (parsed) setLocalizedSlotLabel(input, `${LABELS[parsed.mediaType] || parsed.mediaType}${parsed.ordinal}`);
     }
     const outputLabels = { model: TEXT.outputModel, second_sampling_model: TEXT.outputSecondSamplingModel, h3_context: TEXT.outputContext };
     for (const output of node.outputs || []) {
@@ -511,11 +576,13 @@ function localizeNodeInstance(node) {
 }
 
 function localizeNodeDefinition(nodeData) {
-    if (!nodeData || ![NODE_CLASS, LOADER_CLASS, REMIX_LOADER_CLASS, ADAPTER_CLASS, OUTPUT_CLASS].includes(nodeData.name)) return;
+    if (!nodeData || ![NODE_CLASS, LOADER_CLASS, REMIX_LOADER_CLASS, UNIFIED_LOADER_CLASS, ADAPTER_CLASS, OUTPUT_CLASS].includes(nodeData.name)) return;
     nodeData.display_name = nodeData.name === LOADER_CLASS
         ? TEXT.loaderTitle
         : nodeData.name === REMIX_LOADER_CLASS
             ? TEXT.remixLoaderTitle
+        : nodeData.name === UNIFIED_LOADER_CLASS
+            ? TEXT.unifiedLoaderTitle
         : nodeData.name === ADAPTER_CLASS
             ? TEXT.adapterTitle
             : nodeData.name === OUTPUT_CLASS
@@ -549,7 +616,7 @@ function isReferenceMode(node) {
 }
 
 function isCustomResolution(node) {
-    return canonicalOption("resolution", getWidgetValue(node, "resolution", "480P")) === RESOLUTION_CUSTOM;
+    return canonicalOption("resolution", getWidgetValue(node, "resolution", RESOLUTION_DEFAULT)) === RESOLUTION_CUSTOM;
 }
 
 function isAdvancedEnabled(node) {
@@ -646,6 +713,173 @@ function normalizeAudioTrimRange(value) {
     const endSeconds = end.seconds > 0 && end.seconds < start.seconds ? start.seconds : end.seconds;
     return `${formatAudioTrimPart(startSeconds)}-${formatAudioTrimPart(endSeconds)}`;
 }
+const MEDIA_SLOT_TYPES = Object.freeze({ image: "IMAGE", video: "VIDEO", audio: "AUDIO" });
+
+function mediaSlotName(mediaType, ordinal) {
+    return `${String(mediaType)}_${Number(ordinal)}`;
+}
+
+function parseMediaSlotName(name) {
+    const match = String(name || "").toLowerCase().match(/^(image|video|audio)_([0-9]+)$/);
+    if (!match) return null;
+    return { mediaType: match[1], ordinal: Number(match[2]) };
+}
+
+function isMediaSlotEnabled(node, mediaType, ordinal) {
+    if (isReferenceMode(node)) return true;
+    return mediaType === "image" && Number(ordinal) <= 2;
+}
+
+function getMediaSlotInput(node, mediaType, ordinal) {
+    const name = mediaSlotName(mediaType, ordinal);
+    return (node?.inputs || []).find((input) => String(input?.name || "") === name) || null;
+}
+
+function getMediaSlotInputIndex(node, mediaType, ordinal) {
+    const name = mediaSlotName(mediaType, ordinal);
+    return node?.inputs?.findIndex((input) => String(input?.name || "") === name) ?? -1;
+}
+
+function clientToGraph(canvas, clientX, clientY) {
+    const rect = canvas?.canvas?.getBoundingClientRect?.();
+    if (!rect || !Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    const scale = canvas?.ds?.scale || 1;
+    const offset = canvas?.ds?.offset || [0, 0];
+    return [(clientX - rect.left) / scale - offset[0], (clientY - rect.top) / scale - offset[1]];
+}
+
+function galleryCellGraphPos(node, mediaType, ordinal) {
+    const cell = embeddedMediaCell(node, mediaType, ordinal);
+    const port = cell?.querySelector?.(".fh-h3-media-slot-port");
+    const el = port || cell;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width && !rect.height) return null;
+    return clientToGraph(app.canvas, rect.left + rect.width * 0.5, rect.top + rect.height * 0.5);
+}
+
+function disconnectMediaSlot(node, mediaType, ordinal) {
+    const links = ensureLinks(node);
+    const index = links.findIndex((link) => (
+        String(link.media_type || "image") === mediaType && Number(link.ordinal) === Number(ordinal)
+    ));
+    if (index >= 0) links.splice(index, 1);
+    const nativeIndex = getMediaSlotInputIndex(node, mediaType, ordinal);
+    if (nativeIndex >= 0) node.disconnectInput?.(nativeIndex);
+    renderEmbeddedMediaGallery(node);
+    requestMentionPreviewRefresh();
+    node.setDirtyCanvas?.(true, true);
+    app.graph?.change?.();
+}
+
+function ensureMediaSlotInputs(node) {
+    if (!node) return;
+    if (Array.isArray(node.inputs)) {
+        for (let index = node.inputs.length - 1; index >= 0; index -= 1) {
+            const parsed = parseMediaSlotName(node.inputs[index]?.name);
+            if (!parsed) continue;
+            if (node.inputs[index]?.link != null) {
+                convertNativeMediaConnection(node, index);
+            }
+            removeInputSlot(node, index);
+        }
+    }
+}
+
+function syncMediaSlotLayout(node) {
+    if (!node?.inputs) return;
+    for (const input of node.inputs) {
+        const parsed = parseMediaSlotName(input.name);
+        if (!parsed) continue;
+        input.hidden = true;
+        input.type = MEDIA_SLOT_TYPES[parsed.mediaType];
+        delete input.pos;
+    }
+}
+
+function gallerySlotHit(node, x, y) {
+    for (const mediaType of Object.keys(EMBEDDED_MEDIA_LIMITS)) {
+        for (let ordinal = 1; ordinal <= EMBEDDED_MEDIA_LIMITS[mediaType]; ordinal += 1) {
+            if (!isMediaSlotEnabled(node, mediaType, ordinal)) continue;
+            const cell = embeddedMediaCell(node, mediaType, ordinal);
+            if (!cell) continue;
+            const rect = cell.getBoundingClientRect();
+            if (!rect.width && !rect.height) continue;
+            const topLeft = clientToGraph(app.canvas, rect.left, rect.top);
+            const bottomRight = clientToGraph(app.canvas, rect.right, rect.bottom);
+            if (!topLeft || !bottomRight) continue;
+            if (x >= topLeft[0] - 10 && x <= bottomRight[0] && y >= topLeft[1] && y <= bottomRight[1]) {
+                return { mediaType, ordinal };
+            }
+        }
+    }
+    return null;
+}
+
+function installMediaSlotGeometry(node) {
+    if (!node || node.__h3MediaSlotGeometryInstalled) return;
+    node.__h3MediaSlotGeometryInstalled = true;
+    const originalGetConnectionPos = node.getConnectionPos;
+    node.getConnectionPos = function getConnectionPosMediaSlots(isInput, slot, out) {
+        if (isInput) {
+            const input = this.inputs?.[slot];
+            const parsed = parseMediaSlotName(input?.name);
+            if (parsed && isMediaSlotEnabled(this, parsed.mediaType, parsed.ordinal)) {
+                const graph = galleryCellGraphPos(this, parsed.mediaType, parsed.ordinal);
+                if (graph) {
+                    const point = out || [0, 0];
+                    point[0] = graph[0];
+                    point[1] = graph[1];
+                    return point;
+                }
+            }
+        }
+        return originalGetConnectionPos?.apply(this, arguments);
+    };
+    const originalGetInputPos = node.getInputPos;
+    if (typeof originalGetInputPos === "function") {
+        node.getInputPos = function getInputPosMediaSlots(slot) {
+            const input = this.inputs?.[slot];
+            const parsed = parseMediaSlotName(input?.name);
+            if (parsed && isMediaSlotEnabled(this, parsed.mediaType, parsed.ordinal)) {
+                const graph = galleryCellGraphPos(this, parsed.mediaType, parsed.ordinal);
+                if (graph) return graph;
+            }
+            return originalGetInputPos.apply(this, arguments);
+        };
+    }
+    const originalGetSlotInPosition = node.getSlotInPosition;
+    if (typeof originalGetSlotInPosition === "function") {
+        node.getSlotInPosition = function getSlotInPositionMediaSlots(x, y) {
+            const hit = gallerySlotHit(this, x, y);
+            if (hit) {
+                const index = getMediaSlotInputIndex(this, hit.mediaType, hit.ordinal);
+                const input = index >= 0 ? this.inputs[index] : null;
+                if (input) {
+                    return {
+                        input: true,
+                        slot: index,
+                        link_pos: galleryCellGraphPos(this, hit.mediaType, hit.ordinal) || [x, y],
+                    };
+                }
+            }
+            return originalGetSlotInPosition.apply(this, arguments);
+        };
+    }
+    const originalComputeSize = node.computeSize;
+    if (typeof originalComputeSize === "function") {
+        node.computeSize = function computeSizeWithoutMediaSlots(out) {
+            const originalInputs = this.inputs;
+            this.inputs = (originalInputs || []).filter((input) => !parseMediaSlotName(input?.name));
+            try {
+                return originalComputeSize.apply(this, arguments);
+            } finally {
+                this.inputs = originalInputs;
+            }
+        };
+    }
+}
+
 
 function embeddedMediaKey(mediaType, ordinal) {
     return `${String(mediaType)}_${Number(ordinal)}`;
@@ -689,15 +923,68 @@ function ensureEmbeddedMedia(node) {
     return normalized;
 }
 
+function mediaSlotSource(node, mediaType, ordinal) {
+    const index = getMediaSlotInputIndex(node, mediaType, ordinal);
+    const input = index >= 0 ? node.inputs?.[index] : getMediaSlotInput(node, mediaType, ordinal);
+    if (input && input.link != null) {
+        const graph = node.graph || app.graph;
+        const nativeLink = getNativeGraphLink(graph, input.link);
+        const rawSlot = nativeLink?.origin_slot ?? nativeLink?.originSlot ?? nativeLink?.from_slot ?? 0;
+        const sourceSlot = Number.isFinite(Number(rawSlot)) ? Number(rawSlot) : 0;
+        const sourceId = nativeLink?.origin_id ?? nativeLink?.originId ?? nativeLink?.from_id ?? nativeLink?.fromId;
+        const sourceNode = (typeof node.getInputNode === "function" && index >= 0 ? node.getInputNode(index) : null)
+            || (Number.isFinite(Number(sourceId)) ? graph?.getNodeById?.(Number(sourceId)) : null);
+        if (sourceNode) return { sourceNode, sourceSlot, sourceId: Number(sourceNode.id) };
+        if (Number.isFinite(Number(sourceId))) {
+            return { sourceNode: null, sourceSlot, sourceId: Number(sourceId) };
+        }
+    }
+    if (input) return null;
+    const link = ensureLinks(node).find((item) => (
+        String(item.media_type || "image") === mediaType && Number(item.ordinal) === Number(ordinal)
+    ));
+    if (!link) return null;
+    const sourceNode = (node.graph || app.graph)?.getNodeById?.(Number(link.source_id));
+    if (!sourceNode) return null;
+    return {
+        sourceNode,
+        sourceSlot: Number(link.source_slot) || 0,
+        sourceId: Number(link.source_id),
+    };
+}
+
 function embeddedMediaRecords(node, { activeOnly = true } = {}) {
-    const reference = isReferenceMode(node);
-    return ensureEmbeddedMedia(node)
-        .filter((item) => !activeOnly || reference || (item.media_type === "image" && item.ordinal <= 2))
-        .map((item) => ({
-            ...item,
-            source_id: embeddedSyntheticSourceId(item.media_type, item.ordinal),
-            source_slot: 0,
-        }));
+    const gallery = ensureEmbeddedMedia(node);
+    const records = [];
+    for (const mediaType of Object.keys(EMBEDDED_MEDIA_LIMITS)) {
+        for (let ordinal = 1; ordinal <= EMBEDDED_MEDIA_LIMITS[mediaType]; ordinal += 1) {
+            if (activeOnly && !isMediaSlotEnabled(node, mediaType, ordinal)) continue;
+            const wired = mediaSlotSource(node, mediaType, ordinal);
+            if (wired) {
+                records.push({
+                    media_type: mediaType,
+                    ordinal,
+                    filename: sourceFilename(wired.sourceNode, mediaType) || "",
+                    subfolder: "",
+                    storage: "input",
+                    source_id: wired.sourceId,
+                    source_slot: wired.sourceSlot,
+                    wired: true,
+                    previewUrl: sourcePreviewUrl(wired.sourceNode, mediaType),
+                });
+                continue;
+            }
+            const item = gallery.find((entry) => entry.media_type === mediaType && entry.ordinal === ordinal);
+            if (!item) continue;
+            records.push({
+                ...item,
+                source_id: embeddedSyntheticSourceId(mediaType, ordinal),
+                source_slot: 0,
+                wired: false,
+            });
+        }
+    }
+    return records;
 }
 
 function embeddedMediaViewUrl(item) {
@@ -839,6 +1126,7 @@ function normalizeLinks(node, removeMissing = true) {
     const links = ensureLinks(node);
     const normalized = [];
     const seen = new Set();
+    const used = { image: new Set(), video: new Set(), audio: new Set() };
     for (const link of links) {
         const sourceId = Number(link?.source_id);
         const sourceSlot = Number(link?.source_slot) || 0;
@@ -851,19 +1139,23 @@ function normalizeLinks(node, removeMissing = true) {
         const source = canResolveSource ? app.graph.getNodeById(sourceId) : null;
         if (removeMissing && canResolveSource && !source) continue;
         seen.add(key);
-        normalized.push({ ...link, source_id: sourceId, source_slot: sourceSlot, media_type: mediaType });
+        let ordinal = Number(link?.ordinal);
+        if (!Number.isInteger(ordinal) || ordinal < 1 || used[mediaType].has(ordinal)) {
+            ordinal = 0;
+            const limit = EMBEDDED_MEDIA_LIMITS[mediaType] || 0;
+            for (let index = 1; index <= limit; index += 1) {
+                if (!used[mediaType].has(index) && isMediaSlotEnabled(node, mediaType, index)) {
+                    ordinal = index;
+                    break;
+                }
+            }
+        }
+        if (!ordinal) continue;
+        used[mediaType].add(ordinal);
+        normalized.push({ ...link, source_id: sourceId, source_slot: sourceSlot, media_type: mediaType, ordinal, order: ordinal });
     }
-    const changed = normalized.length !== links.length || normalized.some((link, index) => {
-        const previous = links[index];
-        return !previous
-            || Number(previous.source_id) !== link.source_id
-            || Number(previous.source_slot) !== link.source_slot
-            || String(previous.media_type || "image").toLowerCase() !== link.media_type;
-    });
-    if (changed) node.properties[LINKS_PROP] = normalized;
-    else if (links.some((link) => !Number.isFinite(Number(link?.order)))) node.properties[LINKS_PROP] = normalized;
-    resequence(node);
-    return ensureLinks(node);
+    node.properties[LINKS_PROP] = normalized;
+    return normalized;
 }
 
 function getSlotType(slot) {
@@ -888,13 +1180,22 @@ function mediaLimits(node) {
     return { image: 9, video: 3, audio: 3, total: MAX_MEDIA };
 }
 
+function nextFreeOrdinal(node, mediaType) {
+    const used = new Set(
+        ensureLinks(node)
+            .filter((link) => String(link.media_type || "image") === mediaType)
+            .map((link) => Number(link.ordinal)),
+    );
+    const limit = EMBEDDED_MEDIA_LIMITS[mediaType] || 0;
+    for (let ordinal = 1; ordinal <= limit; ordinal += 1) {
+        if (!isMediaSlotEnabled(node, mediaType, ordinal)) continue;
+        if (!used.has(ordinal)) return ordinal;
+    }
+    return 0;
+}
+
 function canAccept(node, mediaType) {
-    const limits = mediaLimits(node);
-    if (!limits[mediaType]) return false;
-    const links = ensureLinks(node);
-    if (links.length >= limits.total) return false;
-    const count = links.filter((link) => String(link.media_type || "image") === mediaType).length;
-    return count < limits[mediaType];
+    return nextFreeOrdinal(node, mediaType) > 0;
 }
 
 function pruneLinksForMode(node) {
@@ -1013,27 +1314,32 @@ function clearConnecting(canvas) {
     canvas.connecting_input = null;
 }
 
-function addVirtualLink(targetNode, sourceNode, sourceSlot, sourceType, mediaType = null) {
+function addVirtualLink(targetNode, sourceNode, sourceSlot, sourceType, mediaType = null, ordinal = null) {
     if (!targetNode || !sourceNode || isSameNode(targetNode, sourceNode)) return false;
     const sourceId = Number(sourceNode.id);
     if (!Number.isFinite(sourceId)) return false;
-    mediaType ||= getMediaType(sourceType, sourceNode);
-    if (!canAccept(targetNode, mediaType)) return false;
-    const links = ensureLinks(targetNode);
-    const exists = links.some((link) => Number(link.source_id) === sourceId && Number(link.source_slot) === Number(sourceSlot));
-    if (exists) return false;
+    const inferred = getMediaType(sourceType, sourceNode);
+    if (mediaType && mediaType !== inferred) return false;
+    mediaType = inferred;
+    const slot = Number(ordinal) > 0 ? Number(ordinal) : nextFreeOrdinal(targetNode, mediaType);
+    if (!slot || !isMediaSlotEnabled(targetNode, mediaType, slot)) return false;
+    const links = ensureLinks(targetNode).filter((link) => !(
+        String(link.media_type || "image") === mediaType && Number(link.ordinal) === slot
+    ));
     links.push({
         source_id: sourceId,
         source_slot: Number(sourceSlot) || 0,
         source_type: sourceType || "*",
         media_type: mediaType,
-        order: links.length + 1,
+        ordinal: slot,
+        order: slot,
     });
-    resequence(targetNode);
+    targetNode.properties[LINKS_PROP] = links;
     targetNode.setDirtyCanvas?.(true, true);
     app.graph?.setDirtyCanvas?.(true, true);
     app.graph?.change?.();
     requestMentionPreviewRefresh();
+    renderEmbeddedMediaGallery(targetNode);
     return true;
 }
 
@@ -1066,7 +1372,8 @@ function getNativeGraphLink(graph, linkId) {
 function convertNativeMediaConnection(targetNode, inputIndex, linkInfo = null) {
     if (!isTarget(targetNode) || targetNode.__h3VirtualWireClearing) return false;
     const input = targetNode.inputs?.[inputIndex];
-    if (!input || !/^media(?:_\d+)?$/i.test(String(input.name || ""))) return false;
+    const parsedSlot = parseMediaSlotName(input?.name);
+    if (!input || (!/^media(?:_\d+)?$/i.test(String(input.name || "")) && !parsedSlot)) return false;
 
     const graph = targetNode.graph || app.graph;
     const linkId = input.link ?? linkInfo?.id ?? linkInfo?.link_id ?? linkInfo?.linkId;
@@ -1092,7 +1399,14 @@ function convertNativeMediaConnection(targetNode, inputIndex, linkInfo = null) {
     const sourceType = getSlotType(output)
         || String(nativeLink.type || nativeLink.origin_type || nativeLink.originType || "*").toUpperCase();
 
-    const added = addVirtualLink(targetNode, sourceNode, sourceSlot, sourceType);
+    const added = addVirtualLink(
+        targetNode,
+        sourceNode,
+        sourceSlot,
+        sourceType,
+        parsedSlot?.mediaType,
+        parsedSlot?.ordinal,
+    );
     targetNode.__h3VirtualWireClearing = true;
     try {
         if (targetNode.inputs?.[inputIndex]?.link != null && typeof targetNode.disconnectInput === "function") {
@@ -1128,10 +1442,10 @@ function cubicPoint(start, end, t) {
 
 function linkGeometry(targetNode, link) {
     const sourceNode = targetNode.graph?.getNodeById?.(Number(link.source_id));
-    const dot = getMediaDot(targetNode);
-    if (!sourceNode || !dot) return null;
+    if (!sourceNode) return null;
     const source = getConnectionPosition(sourceNode, false, Number(link.source_slot) || 0);
-    const target = [dot.x, dot.y];
+    const target = galleryCellGraphPos(targetNode, String(link.media_type || "image"), Number(link.ordinal) || Number(link.order) || 1);
+    if (!target) return null;
     return { sourceNode, source, target, mid: cubicPoint(source, target, 0.5) };
 }
 
@@ -1316,28 +1630,60 @@ function getSlotIndex(slots, rawSlot) {
 
 function getPendingConnectorLink(canvas) {
     const link = canvas?.linkConnector?.renderLinks?.at?.(0);
-    if (!link) return null;
-    const endpointNode = link.node || link.fromNode || link.originNode || link.sourceNode || link.toNode || link.targetNode
-        || link.inputNode || link.outputNode;
-    const endpointSlot = link.fromSlot ?? link.slot ?? link.output ?? link.input ?? link.toSlot ?? {};
-    const toType = String(link.toType || link.targetType || link.targetSlotType || "").toLowerCase();
-    let direction = toType.includes("output") ? "from_input" : "from_output";
-    const inputIndex = getSlotIndex(endpointNode?.inputs, endpointSlot);
-    const outputIndex = getSlotIndex(endpointNode?.outputs, endpointSlot);
-    if (inputIndex >= 0 && outputIndex < 0) direction = "from_input";
-    if (outputIndex >= 0 && inputIndex < 0) direction = "from_output";
-    if (direction === "from_input") {
-        const input = endpointNode?.inputs?.[inputIndex] || endpointSlot;
-        if (!isTarget(endpointNode) || String(input?.name || "") !== "media") return null;
-        return { direction, targetNode: endpointNode, targetSlot: inputIndex };
+    if (link) {
+        const endpointNode = link.node || link.fromNode || link.originNode || link.sourceNode || link.toNode || link.targetNode
+            || link.inputNode || link.outputNode;
+        const endpointSlot = link.fromSlot ?? link.slot ?? link.output ?? link.input ?? link.toSlot ?? {};
+        const toType = String(link.toType || link.targetType || link.targetSlotType || "").toLowerCase();
+        let direction = toType.includes("output") ? "from_input" : "from_output";
+        const inputIndex = getSlotIndex(endpointNode?.inputs, endpointSlot);
+        const outputIndex = getSlotIndex(endpointNode?.outputs, endpointSlot);
+        if (inputIndex >= 0 && outputIndex < 0) direction = "from_input";
+        if (outputIndex >= 0 && inputIndex < 0) direction = "from_output";
+        if (direction === "from_input") {
+            const input = endpointNode?.inputs?.[inputIndex] || endpointSlot;
+            if (!isTarget(endpointNode) || String(input?.name || "") !== "media") return null;
+            return { direction, targetNode: endpointNode, targetSlot: inputIndex };
+        }
+        const output = endpointNode?.outputs?.[outputIndex] || endpointSlot || {};
+        return {
+            direction,
+            sourceNode: endpointNode,
+            sourceSlot: Math.max(0, outputIndex),
+            sourceType: getSlotType(output),
+        };
     }
-    const output = endpointNode?.outputs?.[outputIndex] || endpointSlot || {};
+    const connecting = connectingOutput(canvas);
+    if (!connecting) return null;
     return {
-        direction,
-        sourceNode: endpointNode,
-        sourceSlot: Math.max(0, outputIndex),
-        sourceType: getSlotType(output),
+        direction: "from_output",
+        sourceNode: connecting.sourceNode,
+        sourceSlot: connecting.sourceSlot,
+        sourceType: connecting.sourceType,
     };
+}
+
+function gallerySlotFromEvent(event) {
+    const clientX = Number(event?.clientX);
+    const clientY = Number(event?.clientY);
+    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+    const el = document.elementFromPoint(clientX, clientY);
+    const cell = el?.closest?.(".fh-h3-media-slot");
+    if (!cell || cell.classList.contains("is-disabled")) return null;
+    const gallery = cell.closest(".fh-h3-media-gallery");
+    const node = app.graph?.getNodeById?.(Number(gallery?.dataset?.feihouNodeId));
+    if (!node || !isTarget(node)) return null;
+    const mediaType = String(cell.dataset.mediaType || "");
+    const ordinal = Number(cell.dataset.ordinal);
+    if (!mediaType || !Number.isInteger(ordinal)) return null;
+    return { node, mediaType, ordinal };
+}
+
+function acceptGalleryDrop(event, pending) {
+    if (!pending || pending.direction !== "from_output" || !pending.sourceNode) return false;
+    const hit = gallerySlotFromEvent(event);
+    if (!hit || isSameNode(hit.node, pending.sourceNode)) return false;
+    return addVirtualLink(hit.node, pending.sourceNode, pending.sourceSlot, pending.sourceType, hit.mediaType, hit.ordinal);
 }
 
 function nodeAtGraphPoint(canvas, x, y, ignoredNode = null) {
@@ -1584,19 +1930,13 @@ function installQuickCreateCapture(canvas) {
         // callback can create the resource node.
         if (createMenu || deferredCreateMenuPending || event?.target?.closest?.(".litecontextmenu")) return;
         if (event?.button > 0 || performance.now() - lastCapturedDropAt < 80) return;
-        const pending = getPendingConnectorLink(canvas);
+        const live = getPendingConnectorLink(canvas);
+        if (live?.direction === "from_output") lastDraggedOutput = live;
+        const pending = live || lastDraggedOutput;
         if (!pending) return;
-        const [x, y] = pointerGraphPosition(canvas, event);
         if (pending.direction === "from_output") {
-            const target = (canvas.graph?._nodes || []).find((node) => {
-                if (!isTarget(node)) return false;
-                const dot = getMediaDot(node);
-                return dot && Math.hypot(x - dot.x, y - dot.y) <= 18;
-            });
-            if (!target) return;
-            if (isSameNode(target, pending.sourceNode)) return;
-            const added = addVirtualLink(target, pending.sourceNode, pending.sourceSlot, pending.sourceType);
-            if (!added) return;
+            if (!acceptGalleryDrop(event, pending)) return;
+            lastDraggedOutput = null;
             lastCapturedDropAt = performance.now();
             event.preventDefault?.();
             event.stopPropagation?.();
@@ -1611,9 +1951,15 @@ function installQuickCreateCapture(canvas) {
         }
     };
     const pointerTargets = [window, document, canvas.canvas];
+    const remember = () => {
+        const live = getPendingConnectorLink(canvas);
+        if (live?.direction === "from_output") lastDraggedOutput = live;
+    };
     for (const target of pointerTargets) {
         target.addEventListener?.("pointerup", handler, true);
         target.addEventListener?.("mouseup", handler, true);
+        target.addEventListener?.("pointermove", remember, true);
+        target.addEventListener?.("pointerdown", remember, true);
     }
 
     const events = canvas.linkConnector.events;
@@ -1652,6 +1998,8 @@ function installQuickCreateCapture(canvas) {
         for (const target of pointerTargets) {
             target.removeEventListener?.("pointerup", handler, true);
             target.removeEventListener?.("mouseup", handler, true);
+            target.removeEventListener?.("pointermove", remember, true);
+            target.removeEventListener?.("pointerdown", remember, true);
         }
         events.removeEventListener?.("before-drop-links", beforeDropLinksHandler, { capture: true });
         events.removeEventListener?.("dropped-on-canvas", droppedOnCanvasHandler, { capture: true });
@@ -1828,6 +2176,29 @@ function patchGraphToPrompt() {
                 delete promptNode.inputs[`media_type_${index}`];
                 delete promptNode.inputs[`media_trim_${index}`];
             }
+            for (const mediaType of Object.keys(EMBEDDED_MEDIA_LIMITS)) {
+                for (let ordinal = 1; ordinal <= EMBEDDED_MEDIA_LIMITS[mediaType]; ordinal += 1) {
+                    const slotName = mediaSlotName(mediaType, ordinal);
+                    const galleryName = `gallery_${slotName}`;
+                    delete promptNode.inputs[galleryName];
+                    if (!isMediaSlotEnabled(node, mediaType, ordinal)) {
+                        delete promptNode.inputs[slotName];
+                        continue;
+                    }
+                    const wired = mediaSlotSource(node, mediaType, ordinal);
+                    if (wired?.sourceNode) {
+                        const existing = promptNode.inputs[slotName];
+                        if (!Array.isArray(existing) || existing.length < 2) {
+                            promptNode.inputs[slotName] = [String(wired.sourceId), Number(wired.sourceSlot) || 0];
+                        }
+                        continue;
+                    }
+                    delete promptNode.inputs[slotName];
+                    const item = ensureEmbeddedMedia(node).find((entry) => entry.media_type === mediaType && entry.ordinal === ordinal);
+                    if (!item?.filename) continue;
+                    promptNode.inputs[galleryName] = item.subfolder ? `${item.subfolder}/${item.filename}` : item.filename;
+                }
+            }
             if (node.__h3Editor) syncPromptFromEditor(node, false);
             const runtimeLinks = embeddedMediaRecords(node);
             runtimeLinks.forEach((link, index) => {
@@ -1990,9 +2361,9 @@ function mentionOptions(node) {
         counts[type] = (counts[type] || 0) + 1;
         const ordinal = counts[type];
         const tag = type === "image" ? `<Picture ${ordinal}>` : type === "video" ? `<Video ${ordinal}>` : `<Audio ${ordinal}>`;
-        const fullLabel = embeddedMediaFilename(link) || tag;
+        const fullLabel = embeddedMediaFilename(link) || (link.wired ? TEXT.embeddedWired : tag);
         const label = mode === "index" ? `${LABELS[type] || type}${ordinal}` : truncateMentionLabel(fullLabel);
-        const viewUrl = embeddedMediaViewUrl(link);
+        const viewUrl = link.previewUrl || embeddedMediaViewUrl(link);
         return {
             type,
             tag,
@@ -2001,10 +2372,10 @@ function mentionOptions(node) {
             fullLabel,
             ordinal,
             referenceMode: mode,
-            source: TEXT.embeddedMedia,
+            source: link.wired ? TEXT.embeddedWired : TEXT.embeddedMedia,
             sourceId: Number(link.source_id),
             sourceSlot: Number(link.source_slot) || 0,
-            previewUrl: type === "image" ? viewUrl : type === "video" ? getVideoFrameThumbnail(viewUrl) : "",
+            previewUrl: type === "image" ? viewUrl : type === "video" ? (link.previewUrl || getVideoFrameThumbnail(viewUrl)) : "",
         };
     });
 }
@@ -3512,6 +3883,29 @@ function setNodeSizeExact(node, size) {
     return true;
 }
 
+function collapseInflatedMediaSlotHeight(node) {
+    if (!node || !Array.isArray(node.size)) return false;
+    const hasTypedMediaSlots = (node.inputs || []).some((input) => parseMediaSlotName(input?.name));
+    const currentHeight = Number(node.size[1]);
+    if (!hasTypedMediaSlots && (!Number.isFinite(currentHeight) || currentHeight < 900)) return false;
+    if (node.__h3MediaSlotHeightCollapsed && !hasTypedMediaSlots) return false;
+    node.__h3MediaSlotHeightCollapsed = true;
+    ensureMediaSlotInputs(node);
+    syncMediaSlotLayout(node);
+    const width = Math.max(420, Number(node.size[0]) || 420);
+    const fallback = 240 + (isReferenceMode(node) ? 460 : 275) + getPromptEditorHeight(node);
+    let computedHeight = 0;
+    try {
+        computedHeight = Number(node.computeSize?.([width, 100])?.[1]);
+    } catch {
+        computedHeight = 0;
+    }
+    const height = Number.isFinite(computedHeight) && computedHeight > 240 && computedHeight < 900
+        ? computedHeight
+        : fallback;
+    return setNodeSizeExact(node, [width, Math.max(420, height)]);
+}
+
 function restorePromptEditorStableSize(node) {
     const stableSize = Array.isArray(node?.__h3EditorStableSize) ? [...node.__h3EditorStableSize] : null;
     if (!stableSize || stableSize.length < 2) return false;
@@ -3519,6 +3913,35 @@ function restorePromptEditorStableSize(node) {
     if (restored) node.__h3EditorStableSize = null;
     return restored;
 }
+
+function clampPromptEditorHeight(value) {
+    const height = Number(value);
+    if (!Number.isFinite(height)) return PROMPT_EDITOR_DEFAULT_HEIGHT;
+    return Math.max(PROMPT_EDITOR_MIN_HEIGHT, Math.round(height));
+}
+
+function getPromptEditorHeight(node) {
+    return clampPromptEditorHeight(node?.properties?.[PROMPT_HEIGHT_PROP] || PROMPT_EDITOR_DEFAULT_HEIGHT);
+}
+
+function setPromptEditorHeight(node, height, { resizeNode = true } = {}) {
+    if (!node) return getPromptEditorHeight(node);
+    const next = clampPromptEditorHeight(height);
+    const previous = getPromptEditorHeight(node);
+    node.properties ||= {};
+    node.properties[PROMPT_HEIGHT_PROP] = next;
+    const widget = node.__h3DomWidget;
+    if (widget) {
+        widget.hasLayoutSize = true;
+        widget.computedHeight = next + 8;
+    }
+    if (resizeNode && next !== previous) adjustNodeHeight(node, next - previous);
+    node._widgetSlotsDirty = true;
+    node.setDirtyCanvas?.(true, true);
+    app.graph?.change?.();
+    return next;
+}
+
 
 function hideConditionalWidget(widget) {
     if (!widget) return false;
@@ -3636,7 +4059,7 @@ function syncModeWidgets(node, { adjustHeight = true } = {}) {
         syncAudioDurationAuto(node),
         setConditionalWidgetVisible(node, getWidget(node, "fps"), advanced, { adjustHeight }),
         setConditionalWidgetVisible(node, getWidget(node, "keyframe_role"), advanced && !isReferenceMode(node), { adjustHeight }),
-        setConditionalWidgetVisible(node, getWidget(node, "ref_image_size"), advanced, { adjustHeight }),
+        setConditionalWidgetVisible(node, getWidget(node, "ref_image_size"), isReferenceMode(node), { adjustHeight }),
         setConditionalWidgetVisible(node, getWidget(node, "reference_mention_mode"), advanced && isReferenceMode(node), { adjustHeight }),
         setConditionalWidgetVisible(node, getWidget(node, "force_offload"), advanced, { adjustHeight }),
         setConditionalWidgetVisible(node, getWidget(node, "low_vram_streamed_attention"), advanced, { adjustHeight }),
@@ -4015,20 +4438,21 @@ function sourceAssetDescriptor(node, mediaType) {
 
 function promptOptimizerResources(node) {
     const counts = { image: 0, video: 0, audio: 0 };
-    return embeddedMediaRecords(node).map((link) => {
+    return embeddedMediaRecords(node).flatMap((link) => {
         const type = String(link.media_type || "image").toLowerCase();
+        const filename = embeddedMediaFilename(link);
+        if (!filename) return [];
         counts[type] = (counts[type] || 0) + 1;
-        const ordinal = counts[type];
-        return {
+        return [{
             type,
-            tag: promptMentionTag(type, ordinal),
-            name: embeddedMediaFilename(link),
+            tag: promptMentionTag(type, counts[type]),
+            name: filename,
             asset: {
                 filename: link.filename,
                 subfolder: link.subfolder || "",
                 storage: link.storage || "input",
             },
-        };
+        }];
     });
 }
 
@@ -4902,7 +5326,30 @@ function ensurePromptEditor(node) {
     };
     editor.addEventListener("wheel", wheelHandler, { passive: false, capture: true });
     wrap.addEventListener("wheel", wheelHandler, { passive: false });
-    wrap.append(editor, optimizerStatus, editorTools);
+    const resizeHandle = document.createElement("div");
+    resizeHandle.className = "h3-prompt-editor-resize";
+    resizeHandle.setAttribute("role", "separator");
+    resizeHandle.setAttribute("aria-orientation", "horizontal");
+    resizeHandle.title = ZH_BROWSER ? "\u62d6\u52a8\u8c03\u6574\u63d0\u793a\u8bcd\u9ad8\u5ea6" : "Drag to resize prompt height";
+    resizeHandle.addEventListener("pointerdown", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        resizeHandle.setPointerCapture?.(event.pointerId);
+        const startY = event.clientY;
+        const startHeight = getPromptEditorHeight(node);
+        const scale = Number(app.canvas?.ds?.scale) || 1;
+        const onMove = (moveEvent) => {
+            setPromptEditorHeight(node, startHeight + (moveEvent.clientY - startY) / scale);
+        };
+        const onUp = () => {
+            resizeHandle.releasePointerCapture?.(event.pointerId);
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+        };
+        window.addEventListener("pointermove", onMove);
+        window.addEventListener("pointerup", onUp);
+    });
+    wrap.append(editor, optimizerStatus, editorTools, resizeHandle);
     node.__h3Editor = editor;
     node.__h3EditorWrap = wrap;
     node.__h3PromptEditorTools = editorTools;
@@ -4915,7 +5362,37 @@ function ensurePromptEditor(node) {
     syncPromptOptimizerButton(node);
     resetPromptHistory(node);
     const workbench = node.__feihouMediaWorkbench;
-    if (!workbench) {
+    let domWidget = null;
+    if (workbench) {
+        // Gallery and prompt deliberately share one DOM widget. New ComfyUI
+        // layouts distribute height per DOM widget, so separate widgets can
+        // leave blank space or overlap while their inner content scales.
+        workbench.append(wrap);
+        node.__h3DomWidget = null;
+    } else {
+        const promptHeight = () => getPromptEditorHeight(node);
+        domWidget = node.addDOMWidget("h3_prompt_mentions", "h3_prompt_mentions", wrap, {
+            getValue: () => String(getWidget(node, "prompt")?.value || ""),
+            setValue: (value) => {
+                const promptWidget = getWidget(node, "prompt");
+                if (promptWidget) promptWidget.value = String(value || "");
+                renderEditorFromNode(node);
+            },
+            margin: 10,
+            serialize: false,
+            getMinHeight: promptHeight,
+            afterResize: () => {
+                applyNativeEditorTheme(wrap);
+                const measured = Number(node.__h3DomWidget?.computedHeight);
+                if (Number.isFinite(measured) && measured > getPromptEditorHeight(node) + 8) {
+                    setPromptEditorHeight(node, measured - 8, { resizeNode: false });
+                }
+                node._widgetSlotsDirty = true;
+                node.setDirtyCanvas?.(true, true);
+            },
+            onDraw: () => applyNativeEditorTheme(wrap),
+        });
+        if (!domWidget) {
         restoreOriginalPromptWidget(widget);
         wrap.remove();
         node.__h3Editor = null;
@@ -4924,12 +5401,23 @@ function ensurePromptEditor(node) {
         node.__h3PromptViewButton = null;
         node.__h3PromptOptimizeButton = null;
         return;
+        }
+        node.__h3DomWidget = domWidget;
+        domWidget.serialize = false;
+        domWidget.hasLayoutSize = true;
+        setWidgetOption(domWidget, "serialize", false);
+        setWidgetOption(domWidget, "canvasOnly", false);
+        setPromptEditorHeight(node, getPromptEditorHeight(node), { resizeNode: false });
+        domWidget.__h3EditorType = domWidget.type;
+        domWidget.__h3EditorComputeSize = domWidget.computeSize;
+        const domIndex = node.widgets?.indexOf(domWidget) ?? -1;
+        const promptIndex = node.widgets?.indexOf(widget) ?? -1;
+        if (domIndex >= 0 && promptIndex >= 0 && domIndex !== promptIndex + 1) {
+            node.widgets.splice(domIndex, 1);
+            const nextPromptIndex = node.widgets.indexOf(widget);
+            node.widgets.splice(nextPromptIndex + 1, 0, domWidget);
+        }
     }
-    // Gallery and prompt deliberately share one DOM widget. New ComfyUI
-    // layouts distribute height per DOM widget, so separate widgets can leave
-    // blank space or overlap while their inner content scales.
-    workbench.append(wrap);
-    node.__h3DomWidget = null;
     syncEditorMode(node);
     syncEmbeddedMediaResponsiveLayout(node, { resetBaseline: true });
     repairNodeLayout(node);
@@ -5014,11 +5502,10 @@ function removePromptEditorWidgets(node) {
     for (const widget of stale) {
         try { widget.element?.remove?.(); } catch { /* Already detached. */ }
     }
-    const next = node.widgets.filter((widget) => !stale.includes(widget));
-    node.widgets = next;
-    if (Array.isArray(node._widgets)) node._widgets = next;
-    node.__h3DomWidget = null;
-    node._widgetSlotsDirty = true;
+    node.widgets = node.widgets.filter((widget) => !stale.includes(widget));
+    if (Array.isArray(node._widgets)) {
+        node._widgets = node._widgets.filter((widget) => !stale.includes(widget));
+    }
     refreshVueNodeWidgets(node);
     return true;
 }
@@ -5040,7 +5527,10 @@ function isTransportInputName(name) {
         || /^media_type_[0-9]+$/i.test(String(name || ""))
         || /^media_trim_[0-9]+$/i.test(String(name || ""))
         || /^prompt_optimizer_applied$/i.test(String(name || ""))
-        || /^second_sampling_output_connected$/i.test(String(name || ""));
+        || /^second_sampling_output_connected$/i.test(String(name || ""))
+        || /^(image|video|audio)_[0-9]+$/i.test(String(name || ""))
+        || /^gallery_(image|video|audio)_[0-9]+$/i.test(String(name || ""))
+        || /^prompt_optimizer_applied$/i.test(String(name || ""));
 }
 
 function removeInputSlot(node, index) {
@@ -5161,7 +5651,7 @@ function repairConfiguredWidgetValues(node, info) {
     const defaults = {
         mode: MODE_IMAGE,
         prompt: "",
-        resolution: "480P",
+        resolution: RESOLUTION_DEFAULT,
         aspect_ratio: "16:9",
         width: 1344,
         height: 768,
@@ -5336,11 +5826,11 @@ function createEmbeddedMediaSlot(node, mediaType, ordinal) {
         event.preventDefault();
         event.stopPropagation();
         if (Date.now() < (cell.__h3SuppressClickUntil || 0)) return;
-        if (cell.classList.contains("is-disabled") || cell.classList.contains("is-uploading")) return;
+        if (cell.classList.contains("is-disabled") || cell.classList.contains("is-uploading") || cell.classList.contains("is-wired")) return;
         chooseEmbeddedMediaFile(node, mediaType, ordinal);
     });
     cell.addEventListener("keydown", (event) => {
-        if (!["Enter", " "].includes(event.key) || cell.classList.contains("is-disabled")) return;
+        if (!["Enter", " "].includes(event.key) || cell.classList.contains("is-disabled") || cell.classList.contains("is-wired")) return;
         event.preventDefault();
         event.stopPropagation();
         chooseEmbeddedMediaFile(node, mediaType, ordinal);
@@ -5362,7 +5852,7 @@ function createEmbeddedMediaSlot(node, mediaType, ordinal) {
             .forEach((element) => element.classList.remove("is-reordering", "is-reorder-target", "is-dragover"));
     });
     cell.addEventListener("dragover", (event) => {
-        if (cell.classList.contains("is-disabled")) return;
+        if (cell.classList.contains("is-disabled") || cell.classList.contains("is-wired")) return;
         const payload = embeddedMediaDragPayload(event);
         event.preventDefault();
         event.stopPropagation();
@@ -5375,7 +5865,7 @@ function createEmbeddedMediaSlot(node, mediaType, ordinal) {
     cell.addEventListener("dragleave", () => cell.classList.remove("is-dragover", "is-reorder-target"));
     cell.addEventListener("drop", (event) => {
         cell.classList.remove("is-dragover", "is-reorder-target");
-        if (cell.classList.contains("is-disabled")) return;
+        if (cell.classList.contains("is-disabled") || cell.classList.contains("is-wired")) return;
         const payload = embeddedMediaDragPayload(event);
         event.preventDefault();
         event.stopPropagation();
@@ -5598,7 +6088,7 @@ function renderEmbeddedMediaGallery(node) {
     });
     const reference = isReferenceMode(node);
     gallery.dataset.feihouNodeId = String(node.id ?? "");
-    gallery.dataset.mediaCount = String(records.length);
+    gallery.dataset.mediaCount = String(embeddedMediaRecords(node).length);
     gallery.dataset.referenceMode = reference ? "true" : "false";
     gallery.classList.toggle("is-reference-mode", reference);
     gallery.classList.toggle("is-image-mode", !reference);
@@ -5606,18 +6096,44 @@ function renderEmbeddedMediaGallery(node) {
         for (let ordinal = 1; ordinal <= EMBEDDED_MEDIA_LIMITS[mediaType]; ordinal += 1) {
             const cell = embeddedMediaCell(node, mediaType, ordinal);
             if (!cell) continue;
-            const disabled = !reference && (mediaType !== "image" || ordinal > 2);
-            const record = records.find((item) => item.media_type === mediaType && item.ordinal === ordinal);
+            const disabled = !isMediaSlotEnabled(node, mediaType, ordinal);
+            const wired = !disabled ? mediaSlotSource(node, mediaType, ordinal) : null;
+            const galleryRecord = records.find((item) => item.media_type === mediaType && item.ordinal === ordinal);
+            const hasMedia = Boolean(wired || galleryRecord);
             cell.classList.toggle("is-disabled", disabled);
-            cell.classList.toggle("has-media", Boolean(record));
-            cell.draggable = Boolean(record) && !disabled;
-            cell.title = record && !disabled ? TEXT.embeddedReorder : "";
-            cell.tabIndex = disabled ? -1 : 0;
+            cell.classList.toggle("is-wired", Boolean(wired));
+            cell.classList.toggle("has-media", hasMedia);
+            cell.draggable = Boolean(galleryRecord) && !wired && !disabled;
+            cell.title = galleryRecord && !wired && !disabled ? TEXT.embeddedReorder : "";
+            cell.tabIndex = disabled || wired ? -1 : 0;
             cell.setAttribute("aria-disabled", disabled ? "true" : "false");
             cell.replaceChildren();
 
-            if (record) {
-                const viewUrl = embeddedMediaViewUrl(record);
+            if (wired) {
+                const previewUrl = sourcePreviewUrl(wired.sourceNode, mediaType);
+                if (mediaType === "image" && previewUrl) {
+                    const preview = document.createElement("img");
+                    preview.className = "fh-h3-media-preview";
+                    preview.alt = "";
+                    preview.draggable = false;
+                    preview.src = previewUrl;
+                    cell.append(preview);
+                } else if (mediaType === "video") {
+                    const videoUrl = getNodeVideoSrc(wired.sourceNode);
+                    if (videoUrl) {
+                        const preview = document.createElement("video");
+                        preview.className = "fh-h3-media-preview";
+                        preview.muted = true;
+                        preview.playsInline = true;
+                        preview.preload = "metadata";
+                        preview.src = videoUrl;
+                        cell.append(preview);
+                    }
+                } else if (mediaType === "audio") {
+                    cell.append(makeAudioIcon("fh-h3-media-audio-icon"));
+                }
+            } else if (galleryRecord) {
+                const viewUrl = embeddedMediaViewUrl(galleryRecord);
                 if (mediaType === "image") {
                     const preview = document.createElement("img");
                     preview.className = "fh-h3-media-preview";
@@ -5634,19 +6150,30 @@ function renderEmbeddedMediaGallery(node) {
                     preview.src = viewUrl;
                     cell.append(preview);
                 } else {
-                    const icon = makeAudioIcon("fh-h3-media-audio-icon");
-                    cell.append(icon);
+                    cell.append(makeAudioIcon("fh-h3-media-audio-icon"));
                 }
             }
 
             const badge = document.createElement("span");
             badge.className = "fh-h3-media-slot-badge";
             badge.textContent = String(ordinal);
+            const port = document.createElement("span");
+            port.className = "fh-h3-media-slot-port";
+            port.title = ZH_BROWSER ? "\u5916\u90e8\u63a5\u5165" : "External input";
+            port.addEventListener("pointerdown", (event) => event.stopPropagation());
+            port.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+            });
             const status = document.createElement("span");
             status.className = "fh-h3-media-slot-status";
-            status.textContent = record ? embeddedMediaFilename(record) : disabled ? TEXT.embeddedDisabled : TEXT.embeddedPick;
-            cell.append(badge, status);
-            if (record) {
+            status.textContent = wired
+                ? (sourceFilename(wired.sourceNode, mediaType) || TEXT.embeddedWired)
+                : galleryRecord
+                    ? embeddedMediaFilename(galleryRecord)
+                    : disabled ? TEXT.embeddedDisabled : TEXT.embeddedPick;
+            cell.append(badge, port, status);
+            if (hasMedia) {
                 const clear = document.createElement("button");
                 clear.type = "button";
                 clear.className = "fh-h3-media-slot-clear";
@@ -5659,7 +6186,8 @@ function renderEmbeddedMediaGallery(node) {
                 clear.addEventListener("click", (event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    setEmbeddedMedia(node, mediaType, ordinal, null);
+                    if (wired) disconnectMediaSlot(node, mediaType, ordinal);
+                    else setEmbeddedMedia(node, mediaType, ordinal, null);
                 });
                 cell.append(clear);
             }
@@ -5672,7 +6200,7 @@ function renderEmbeddedMediaGallery(node) {
     });
     syncEmbeddedMediaResponsiveLayout(node);
     node._widgetSlotsDirty = true;
-    repairNodeLayout(node);
+    syncMediaSlotLayout(node);
 }
 
 function removeEmbeddedMediaGalleryWidgets(node) {
@@ -5743,13 +6271,16 @@ function ensureEmbeddedMediaGallery(node) {
 function setupMainNodeFrontend(node) {
     if (!node || !isTarget(node)) return;
     node.properties ||= {};
-    delete node.properties[LINKS_PROP];
     ensureEmbeddedMedia(node);
     pruneTransportInputsFromNode(node, { force: true });
+    ensureMediaSlotInputs(node);
+    installMediaSlotGeometry(node);
     localizeNodeInstance(node);
     bindPromptOptimizerWidgetCallbacks(node);
     syncModeWidgets(node);
     ensureEmbeddedMediaGallery(node);
+    syncMediaSlotLayout(node);
+    collapseInflatedMediaSlotHeight(node);
     installPromptEditorSoon(node);
 
     const modeWidget = getWidget(node, "mode");
@@ -5827,9 +6358,6 @@ function applyFreshNodeDefaults(node) {
 
 function installNode(nodeType, nodeData) {
     if (nodeData?.name !== NODE_CLASS) return;
-    // Strip the virtual-wire transport fields from every frontend definition
-    // before a node instance can be constructed. Execution still receives
-    // them through the prompt patch and the Python INPUT_TYPES declaration.
     pruneTransportInputs(nodeData);
     if (nodeType?.nodeData && nodeType.nodeData !== nodeData) pruneTransportInputs(nodeType.nodeData);
     if (nodeType?.prototype?.constructor?.nodeData && nodeType.prototype.constructor.nodeData !== nodeData) {
@@ -5849,16 +6377,16 @@ function installNode(nodeType, nodeData) {
     nodeType.prototype.onAdded = function onAddedH3Easy(graph) {
         const result = originalAdded?.apply(this, arguments);
         this.properties ||= {};
-        delete this.properties[LINKS_PROP];
         ensureEmbeddedMedia(this);
         pruneTransportInputsFromNode(this, { force: true });
+        ensureMediaSlotInputs(this);
+        installMediaSlotGeometry(this);
         localizeNodeInstance(this);
         bindPromptOptimizerWidgetCallbacks(this);
         ensureEmbeddedMediaGallery(this);
-        // A workflow-tab activation is a restore operation. Its serialized or
-        // previously stable size is already authoritative, so reapplying the
-        // same widget visibility must not add/subtract rows again.
         syncModeWidgets(this, { adjustHeight: false });
+        syncMediaSlotLayout(this);
+        collapseInflatedMediaSlotHeight(this);
         repairNodeLayout(this);
         return result;
     };
@@ -5869,11 +6397,7 @@ function installNode(nodeType, nodeData) {
             ? [Number(info.size[0]), Number(info.size[1])]
             : null;
         const result = originalConfigure?.apply(this, arguments);
-        if (configuredSize && configuredSize.every(Number.isFinite)) {
-            // Adding/replacing the DOM prompt editor may make ComfyUI expand
-            // the node to its calculated minimum. Restore the exact workflow
-            // size after the editor is mounted instead of accumulating that
-            // minimum every time the workflow tab is activated.
+        if (configuredSize && configuredSize.every(Number.isFinite) && configuredSize[1] < 900) {
             this.__h3EditorStableSize = configuredSize;
         }
         if (info?.properties?.[PROMPT_DOC_PROP]) {
@@ -5884,11 +6408,16 @@ function installNode(nodeType, nodeData) {
             this.properties ||= {};
             this.properties[PROMPT_VIEW_PROP] = info.properties[PROMPT_VIEW_PROP];
         }
+        if (Array.isArray(info?.properties?.[LINKS_PROP])) {
+            this.properties ||= {};
+            this.properties[LINKS_PROP] = info.properties[LINKS_PROP].map((link) => ({ ...link }));
+        }
         repairConfiguredWidgetValues(this, info);
         this.properties ||= {};
-        delete this.properties[LINKS_PROP];
         ensureEmbeddedMedia(this);
         pruneTransportInputsFromNode(this, { force: true });
+        ensureMediaSlotInputs(this);
+        installMediaSlotGeometry(this);
         localizeNodeInstance(this);
         bindPromptOptimizerWidgetCallbacks(this);
         ensureEmbeddedMediaGallery(this);
@@ -5901,10 +6430,8 @@ function installNode(nodeType, nodeData) {
         installPromptEditorSoon(this);
         if (this.__h3Editor && restorePromptEditorStableSize(this)) repairNodeLayout(this);
         repairNodeLayout(this);
-        const mediaInputIndex = getMediaInputIndex(this);
-        if (mediaInputIndex >= 0 && this.inputs?.[mediaInputIndex]?.link != null) {
-            scheduleNativeMediaConnectionConversion(this, mediaInputIndex);
-        }
+        syncMediaSlotLayout(this);
+        collapseInflatedMediaSlotHeight(this);
         return result;
     };
 
@@ -5927,8 +6454,20 @@ function installNode(nodeType, nodeData) {
             syncPromptExternalConnectionState(this);
             globalThis.requestAnimationFrame?.(() => syncPromptExternalConnectionState(this));
         }
-        if (connected && !this.__h3VirtualWireClearing && /^media(?:_\d+)?$/i.test(String(input?.name || ""))) {
-            scheduleNativeMediaConnectionConversion(this, inputIndex, linkInfo);
+        if (parseMediaSlotName(input?.name)) {
+            const parsed = parseMediaSlotName(input.name);
+            if (parsed && connected === false) {
+                const links = ensureLinks(this);
+                const stale = links.findIndex((item) => (
+                    String(item.media_type || "image") === parsed.mediaType
+                    && Number(item.ordinal) === Number(parsed.ordinal)
+                ));
+                if (stale >= 0) links.splice(stale, 1);
+            }
+            const wired = parsed ? mediaSlotSource(this, parsed.mediaType, parsed.ordinal) : null;
+            if (wired?.sourceNode) watchMediaSourceNode(wired.sourceNode);
+            renderEmbeddedMediaGallery(this);
+            requestMentionPreviewRefresh();
         }
         return result;
     };
@@ -5960,6 +6499,7 @@ function installNode(nodeType, nodeData) {
             ];
             info.widgets_values = names.map((name) => getWidget(this, name)?.value ?? null);
             info.widgets_values_named = Object.fromEntries(names.map((name, i) => [name, info.widgets_values[i]]));
+            info.properties[LINKS_PROP] = ensureLinks(this).map((link) => ({ ...link }));
         }
         return result;
     };
@@ -6002,9 +6542,12 @@ function installNode(nodeType, nodeData) {
 }
 
 function installLoaderNode(nodeType, nodeData) {
-    if (nodeData?.name !== LOADER_CLASS) return;
-    if (nodeType.prototype.__feihouStandardH3EasyLoaderInstalled) return;
-    nodeType.prototype.__feihouStandardH3EasyLoaderInstalled = true;
+    const isLegacy = nodeData?.name === LOADER_CLASS;
+    const isUnified = nodeData?.name === UNIFIED_LOADER_CLASS;
+    if (!isLegacy && !isUnified) return;
+    const marker = isUnified ? "__h3EasyUnifiedLoaderInstalled" : "__h3EasyLoaderInstalled";
+    if (nodeType.prototype[marker]) return;
+    nodeType.prototype[marker] = true;
     const originalCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function onNodeCreatedH3Loader() {
         const result = originalCreated?.apply(this, arguments);
@@ -6088,8 +6631,12 @@ function install() {
     if (installed) return;
     installed = true;
     patchGraphToPrompt();
+    patchCanvas();
     patchEditorKeyHandling();
     installNativeThemeWatcher();
+    const retryCanvas = () => { if (!patchedCanvas) patchCanvas(); };
+    setTimeout(retryCanvas, 0);
+    setTimeout(retryCanvas, 500);
     document.addEventListener("pointerdown", (event) => {
         for (const node of app.graph?._nodes || []) {
             const state = node?.__h3MentionMenu;
@@ -6151,6 +6698,7 @@ function install() {
       .fh-h3-media-slot:active:not(.is-disabled) { transform: scale(.985); }
       .fh-h3-media-slot.has-media { border-style: solid; border-color: rgba(255,255,255,.18); background: rgba(0,0,0,.28); }
       .fh-h3-media-slot.is-disabled { opacity: .24; cursor: not-allowed; filter: grayscale(.8); }
+      .fh-h3-media-slot.is-wired { cursor: default; border-style: solid; border-color: rgba(0,226,187,.55); }
       .fh-h3-media-slot.is-uploading { cursor: wait; opacity: .68; }
       .fh-h3-media-preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #111; pointer-events: none; }
       .fh-h3-media-audio-icon { width: 40px; height: 40px; object-fit: contain; opacity: .86; pointer-events: none; }
@@ -6158,6 +6706,13 @@ function install() {
         position: absolute; left: 4px; top: 4px; z-index: 2; display: inline-flex; align-items: center; justify-content: center; width: 17px; height: 17px;
         border-radius: 5px; background: rgba(0,0,0,.68); color: rgba(255,255,255,.9); font: 700 9px/1 Consolas, monospace; pointer-events: none;
       }
+      .fh-h3-media-slot-port {
+        position: absolute; left: 6px; top: 24px; z-index: 4; width: 10px; height: 10px; box-sizing: border-box;
+        border: 1.5px solid rgba(0,226,187,.92); border-radius: 50%; background: #1a1c20; pointer-events: auto;
+        box-shadow: 0 0 0 1px rgba(0,0,0,.45);
+      }
+      .fh-h3-media-slot.is-wired .fh-h3-media-slot-port { background: rgba(0,226,187,.95); }
+      .fh-h3-media-slot.is-disabled .fh-h3-media-slot-port { opacity: .28; }
       .fh-h3-media-slot-status {
         position: absolute; left: 4px; right: 4px; bottom: 4px; z-index: 2; overflow: hidden; padding: 2px 4px; border-radius: 4px;
         background: rgba(0,0,0,.62); color: rgba(255,255,255,.8); font: 500 8px/12px system-ui, sans-serif; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
@@ -6196,6 +6751,15 @@ function install() {
       .h3-prompt-editor-wrap.is-external .h3-prompt-editor:focus { box-shadow: none; }
       .h3-prompt-editor-wrap.is-loading .h3-prompt-editor { cursor: wait; opacity: .72; }
       .h3-prompt-editor:empty::before { content: attr(data-placeholder); color: var(--h3-native-widget-muted, rgba(255,255,255,.38)); pointer-events: none; }
+      .h3-prompt-editor-resize {
+        position: absolute; left: 0; right: 0; bottom: 0; z-index: 4; height: 10px; cursor: ns-resize;
+      }
+      .h3-prompt-editor-resize::after {
+        content: ""; position: absolute; left: 50%; bottom: 3px; width: 28px; height: 3px; margin-left: -14px;
+        border-radius: 99px; background: rgba(255,255,255,.28);
+      }
+      .h3-prompt-editor-resize:hover::after, .h3-prompt-editor-resize:focus-visible::after { background: rgba(0,226,187,.7); }
+
       .h3-prompt-editor-status {
         position: absolute; left: 12px; bottom: 4px; z-index: 3; display: inline-flex; align-items: center; gap: 5px; max-width: calc(100% - 92px);
         overflow: hidden; color: var(--h3-native-widget-text, rgba(255,255,255,.78)); opacity: .56; pointer-events: none; user-select: none;
@@ -6433,6 +6997,7 @@ app.registerExtension({
         installRemixLoaderNode(nodeType, nodeData);
         installAdapterNode(nodeType, nodeData);
         installOutputNode(nodeType, nodeData);
+        installMediaSourceNode(nodeType, nodeData);
         installNode(nodeType, nodeData);
     },
 });
