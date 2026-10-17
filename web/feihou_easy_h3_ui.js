@@ -3939,6 +3939,16 @@ function restorePromptEditorStableSize(node) {
     return restored;
 }
 
+function restorePromptEditorLayout(node) {
+    if (!restorePromptEditorStableSize(node)) return false;
+    // Restoring the saved node size happens after the responsive baseline is
+    // established, so run the layout pass again to consume the restored space.
+    syncEmbeddedMediaResponsiveLayout(node);
+    repairNodeLayout(node);
+    globalThis.requestAnimationFrame?.(() => syncEmbeddedMediaResponsiveLayout(node));
+    return true;
+}
+
 function clampPromptEditorHeight(value) {
     const height = Number(value);
     if (!Number.isFinite(height)) return PROMPT_EDITOR_DEFAULT_HEIGHT;
@@ -5500,7 +5510,7 @@ function installPromptEditorSoon(node) {
         node.__h3PromptInstallPending = false;
         ensurePromptEditor(node);
         if (node.__h3Editor) {
-            if (restorePromptEditorStableSize(node)) repairNodeLayout(node);
+            restorePromptEditorLayout(node);
             node.__h3PromptInstallAttempts = 0;
             node.__h3PromptInstallNextAt = 0;
             return;
@@ -6481,7 +6491,7 @@ function installNode(nodeType, nodeData) {
         syncEditorMode(this);
         requestMentionPreviewRefresh();
         installPromptEditorSoon(this);
-        if (this.__h3Editor && restorePromptEditorStableSize(this)) repairNodeLayout(this);
+        if (this.__h3Editor) restorePromptEditorLayout(this);
         repairNodeLayout(this);
         syncMediaSlotLayout(this);
         collapseInflatedMediaSlotHeight(this);
