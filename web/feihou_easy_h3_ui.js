@@ -6791,18 +6791,19 @@ function install() {
         box-sizing: border-box; padding: 0; border-radius: var(--h3-native-widget-radius, 0); overflow: hidden; contain: size layout paint;
       }
       .h3-prompt-editor {
-        --h3-prompt-text-size: calc(var(--h3-native-widget-text-size, var(--comfy-textarea-font-size, 12px)) + 2px);
+        --h3-prompt-font-family: "SimHei", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+        --h3-prompt-text-size: calc(var(--h3-native-widget-text-size, var(--comfy-textarea-font-size, 12px)) + 3.5px);
         display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; max-height: 100%; box-sizing: border-box;
         padding: var(--h3-native-widget-padding, 2px);
         padding-bottom: calc(var(--h3-native-widget-padding, 2px) + 24px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
         white-space: pre-wrap; overflow-wrap: anywhere; border: 0; border-radius: var(--h3-native-widget-radius, 0); outline: none;
         resize: none; background-color: var(--h3-native-widget-bg, var(--comfy-input-bg, #222));
         color: var(--h3-native-widget-text, var(--input-text, #ddd)); caret-color: var(--h3-native-widget-text, var(--input-text, #ddd));
-        font-family: Consolas, "Courier New", monospace; font-size: var(--h3-prompt-text-size); font-weight: 400;
+        font-family: var(--h3-prompt-font-family); font-size: var(--h3-prompt-text-size); font-weight: 400;
         font-style: normal; line-height: var(--h3-native-widget-line-height, normal); letter-spacing: 0;
       }
       .h3-prompt-editor :not(.h3-mention-chip):not(.h3-mention-chip *):not(.h3-dialogue-block):not(.h3-dialogue-block *) {
-        font-family: Consolas, "Courier New", monospace !important; font-size: var(--h3-prompt-text-size) !important;
+        font-family: var(--h3-prompt-font-family) !important; font-size: var(--h3-prompt-text-size) !important;
         font-weight: 400 !important; font-style: normal !important; line-height: var(--h3-native-widget-line-height, normal) !important; letter-spacing: 0 !important;
       }
       .h3-prompt-editor-wrap.h3-native-vue-nodes .h3-prompt-editor:focus {
@@ -6862,7 +6863,7 @@ function install() {
       .h3-mention-chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: baseline; }
       .h3-dialogue-block {
         display: inline; margin: 0 1px; padding: 2px 4px; vertical-align: 1px; border: 0; border-radius: 4px;
-        background: rgba(0,226,187,.14); color: rgba(190,255,244,.98); font-family: Consolas, "Courier New", monospace; font-size: var(--h3-prompt-text-size, 12px);
+        background: rgba(0,226,187,.14); color: rgba(190,255,244,.98); font-family: var(--h3-prompt-font-family, sans-serif); font-size: var(--h3-prompt-text-size, 12px);
         box-shadow: inset 0 0 0 1px rgba(0,226,187,.16); font-weight: 400; line-height: calc(1em + 6px); letter-spacing: 0; white-space: pre-wrap;
         -webkit-box-decoration-break: clone; box-decoration-break: clone; user-select: text; cursor: text; outline: none;
       }
