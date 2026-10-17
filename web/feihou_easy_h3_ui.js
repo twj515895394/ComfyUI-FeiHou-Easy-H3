@@ -12,6 +12,7 @@ const OUTPUT_CLASS = "FeiHouEasyH3Output";
 const PROMPT_PREVIEW_CLASS = "FeiHouEasyH3PromptPreview";
 const LINKS_PROP = "minimax_h3_virtual_media_links";
 const EMBEDDED_MEDIA_PROP = "feihou_h3_embedded_media";
+const IMAGE_GALLERY_EXPANDED_PROP = "feihou_h3_image_gallery_expanded";
 const PROMPT_DOC_PROP = "minimax_h3_prompt_reference_doc";
 const PROMPT_VIEW_PROP = "minimax_h3_prompt_view_mode";
 const PROMPT_HEIGHT_PROP = "minimax_h3_prompt_editor_height";
@@ -173,6 +174,8 @@ const TEXT = {
     inputMedia: "Media",
     embeddedMedia: ZH_BROWSER ? "\u8282\u70b9\u5185\u5d4c\u5a92\u4f53" : "Embedded media",
     embeddedImages: ZH_BROWSER ? "\u53c2\u8003\u56fe\u7247 \u00b7 9" : "Reference images \u00b7 9",
+    imageGalleryExpand: ZH_BROWSER ? "\u5c55\u5f00\u56fe\u7247" : "Show all images",
+    imageGalleryCollapse: ZH_BROWSER ? "\u6536\u8d77\u56fe\u7247" : "Collapse images",
     embeddedVideos: ZH_BROWSER ? "\u53c2\u8003\u89c6\u9891 \u00b7 3" : "Reference videos \u00b7 3",
     embeddedAudios: ZH_BROWSER ? "\u53c2\u8003\u97f3\u9891 \u00b7 3" : "Reference audio \u00b7 3",
     audioTrim: ZH_BROWSER ? "\u65f6\u95f4\u622a\u53d6" : "Trim range",
@@ -632,6 +635,9 @@ const EMBEDDED_MEDIA_LIMITS = Object.freeze({ image: 9, video: 3, audio: 3 });
 const EMBEDDED_MEDIA_ORDER = Object.freeze({ image: 0, video: 1, audio: 2 });
 const EMBEDDED_MEDIA_LAYOUT = Object.freeze({
     imageSlotBase: 72,
+    imageRowsExpanded: 3,
+    imageRowsCollapsed: 1,
+    mediaGridRowGap: 4,
     // Gallery and prompt heights are distributed by ComfyUI together. Keep
     // their requested growth equal to the actual added node height so the
     // gallery never renders beyond the space allocated to it.
@@ -653,6 +659,25 @@ const EMBEDDED_MEDIA_LAYOUT = Object.freeze({
     imageModeChrome: 32,
     referenceModeChrome: 198,
 });
+
+function isImageGalleryExpanded(node) {
+    return node?.properties?.[IMAGE_GALLERY_EXPANDED_PROP] === true;
+}
+
+function imageGalleryRows(node) {
+    const layout = EMBEDDED_MEDIA_LAYOUT;
+    return isImageGalleryExpanded(node) ? layout.imageRowsExpanded : layout.imageRowsCollapsed;
+}
+
+function setImageGalleryExpanded(node, expanded) {
+    if (!node) return;
+    node.properties ||= {};
+    node.properties[IMAGE_GALLERY_EXPANDED_PROP] = Boolean(expanded);
+    renderEmbeddedMediaGallery(node);
+    node.setDirtyCanvas?.(true, true);
+    app.graph?.change?.();
+}
+
 const EMBEDDED_MEDIA_ACCEPT = Object.freeze({
     image: "image/png,image/jpeg,image/webp,image/gif,image/bmp",
     video: "video/mp4,video/webm,video/quicktime,video/x-matroska,video/x-msvideo",
@@ -5884,7 +5909,22 @@ function createEmbeddedMediaSection(node, mediaType, count, title) {
     section.className = `fh-h3-media-section is-${mediaType}`;
     const heading = document.createElement("div");
     heading.className = "fh-h3-media-heading";
-    heading.textContent = title;
+    const headingLabel = document.createElement("span");
+    headingLabel.textContent = title;
+    heading.append(headingLabel);
+    if (mediaType === "image") {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "fh-h3-media-gallery-toggle";
+        toggle.dataset.mediaGalleryToggle = "image";
+        toggle.addEventListener("pointerdown", (event) => event.stopPropagation());
+        toggle.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            setImageGalleryExpanded(node, !isImageGalleryExpanded(node));
+        });
+        heading.append(toggle);
+    }
     const grid = document.createElement("div");
     grid.className = `fh-h3-media-grid is-${mediaType}`;
     for (let ordinal = 1; ordinal <= count; ordinal += 1) {
@@ -6001,12 +6041,14 @@ function createEmbeddedAudioTrimControls(node, mediaType = "audio") {
     return wrap;
 }
 
-function embeddedGalleryHeight(reference, imageSlotHeight) {
+function embeddedGalleryHeight(reference, imageSlotHeight, imageRows = EMBEDDED_MEDIA_LAYOUT.imageRowsExpanded) {
     const layout = EMBEDDED_MEDIA_LAYOUT;
     const imageHeight = Math.round(Number(imageSlotHeight) || layout.imageSlotBase);
-    if (!reference) return imageHeight * 3 + layout.imageModeChrome + layout.widgetRowOffset;
+    const rows = Math.max(layout.imageRowsCollapsed, Math.min(layout.imageRowsExpanded, Math.round(Number(imageRows) || layout.imageRowsExpanded)));
+    const rowGapDelta = (rows - layout.imageRowsExpanded) * layout.mediaGridRowGap;
+    if (!reference) return imageHeight * rows + layout.imageModeChrome + rowGapDelta + layout.widgetRowOffset;
     const videoHeight = Math.round(imageHeight * layout.videoToImageRatio);
-    return imageHeight * 3 + videoHeight + layout.referenceModeChrome + layout.widgetRowOffset;
+    return imageHeight * rows + videoHeight + layout.referenceModeChrome + rowGapDelta + layout.widgetRowOffset;
 }
 
 function syncEmbeddedMediaResponsiveLayout(node, { resetBaseline = false } = {}) {
@@ -6017,8 +6059,9 @@ function syncEmbeddedMediaResponsiveLayout(node, { resetBaseline = false } = {})
     if (!gallery || !workbench || !galleryWidget || !promptWrap) return false;
     const reference = isReferenceMode(node);
     const layout = EMBEDDED_MEDIA_LAYOUT;
+    const imageRows = imageGalleryRows(node);
     const modeKey = reference ? "reference" : "image";
-    const minGalleryHeight = embeddedGalleryHeight(reference, layout.imageSlotMin);
+    const minGalleryHeight = embeddedGalleryHeight(reference, layout.imageSlotMin, imageRows);
     const padding = layout.workbenchPaddingTop + layout.promptBottomGap;
     const hostMinHeight = minGalleryHeight + layout.promptMin + layout.galleryPromptGap + padding;
     const nodeHeight = Number(node?.size?.[1]);
@@ -6047,12 +6090,13 @@ function syncEmbeddedMediaResponsiveLayout(node, { resetBaseline = false } = {})
     );
     const minimumScale = layout.imageSlotMin / layout.imageSlotBase;
     const maximumScale = layout.imageSlotMax / layout.imageSlotBase;
-    const galleryVariableHeight = (reference ? 3 + layout.videoToImageRatio : 3) * layout.imageSlotBase;
-    const galleryChromeHeight = reference ? layout.referenceModeChrome : layout.imageModeChrome;
+    const galleryVariableHeight = (reference ? imageRows + layout.videoToImageRatio : imageRows) * layout.imageSlotBase;
+    const galleryChromeHeight = (reference ? layout.referenceModeChrome : layout.imageModeChrome)
+        + (imageRows - layout.imageRowsExpanded) * layout.mediaGridRowGap;
     const rawScale = (hostHeight - padding - layout.galleryPromptGap - galleryChromeHeight - layout.widgetRowOffset) / (galleryVariableHeight + layout.promptBase);
     const proportionalScale = Math.max(minimumScale, Math.min(maximumScale, rawScale));
     const imageSlotHeight = layout.imageSlotBase * proportionalScale;
-    const galleryHeight = embeddedGalleryHeight(reference, imageSlotHeight);
+    const galleryHeight = embeddedGalleryHeight(reference, imageSlotHeight, imageRows);
     const previewAtMax = proportionalScale >= maximumScale;
     // Reserve the footer inside the allocated host, not as an external margin.
     // Use the exact remainder after rounded preview rows to avoid overflow.
@@ -6092,6 +6136,15 @@ function renderEmbeddedMediaGallery(node) {
     gallery.dataset.referenceMode = reference ? "true" : "false";
     gallery.classList.toggle("is-reference-mode", reference);
     gallery.classList.toggle("is-image-mode", !reference);
+    const imageExpanded = isImageGalleryExpanded(node);
+    gallery.classList.toggle("is-images-expanded", imageExpanded);
+    gallery.classList.toggle("is-images-collapsed", !imageExpanded);
+    const imageToggle = gallery.querySelector("[data-media-gallery-toggle=\"image\"]");
+    if (imageToggle) {
+        imageToggle.textContent = imageExpanded ? TEXT.imageGalleryCollapse : TEXT.imageGalleryExpand;
+        imageToggle.title = imageToggle.textContent;
+        imageToggle.setAttribute("aria-expanded", imageExpanded ? "true" : "false");
+    }
     for (const mediaType of Object.keys(EMBEDDED_MEDIA_LIMITS)) {
         for (let ordinal = 1; ordinal <= EMBEDDED_MEDIA_LIMITS[mediaType]; ordinal += 1) {
             const cell = embeddedMediaCell(node, mediaType, ordinal);
@@ -6235,7 +6288,7 @@ function ensureEmbeddedMediaGallery(node) {
         // One flexible host owns gallery + prompt. Its lower bound is fixed;
         // every extra pixel is then partitioned inside the workbench.
         getMinHeight: () => embeddedGalleryHeight(
-            isReferenceMode(node), EMBEDDED_MEDIA_LAYOUT.imageSlotMin,
+            isReferenceMode(node), EMBEDDED_MEDIA_LAYOUT.imageSlotMin, imageGalleryRows(node),
         ) + EMBEDDED_MEDIA_LAYOUT.promptMin + EMBEDDED_MEDIA_LAYOUT.galleryPromptGap
             + EMBEDDED_MEDIA_LAYOUT.workbenchPaddingTop + EMBEDDED_MEDIA_LAYOUT.promptBottomGap,
         afterResize: () => {
@@ -6664,10 +6717,20 @@ function install() {
       .fh-h3-media-gallery.is-image-mode .fh-h3-media-section.is-audio { display: none; }
       .fh-h3-media-section { display: grid; grid-auto-rows: max-content; align-content: start; gap: 4px; min-width: 0; }
       .fh-h3-media-heading {
-        overflow: hidden; color: var(--h3-native-widget-muted, rgba(255,255,255,.54)); font-size: 10px; font-weight: 650;
-        line-height: 16px; letter-spacing: .035em; text-transform: uppercase; text-overflow: ellipsis; white-space: nowrap;
+        display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; overflow: hidden;
+        color: var(--h3-native-widget-muted, rgba(255,255,255,.54)); font-size: 10px; font-weight: 650;
+        line-height: 16px; letter-spacing: .035em; text-transform: uppercase; white-space: nowrap;
+      }
+      .fh-h3-media-heading > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .fh-h3-media-gallery-toggle {
+        flex: 0 0 auto; height: 16px; padding: 0 4px; border: 0; border-radius: 3px; background: transparent;
+        color: var(--h3-native-widget-muted, rgba(255,255,255,.54)); cursor: pointer; font: 600 9px/16px system-ui, sans-serif;
+      }
+      .fh-h3-media-gallery-toggle:hover, .fh-h3-media-gallery-toggle:focus-visible {
+        background: rgba(255,255,255,.1); color: var(--h3-native-widget-text, rgba(255,255,255,.88)); outline: none;
       }
       .fh-h3-media-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: max-content; align-content: start; gap: 4px; min-width: 0; }
+      .fh-h3-media-gallery.is-images-collapsed .fh-h3-media-section.is-image .fh-h3-media-slot:nth-child(n+4) { display: none; }
       .fh-h3-media-slot {
         appearance: none; position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; height: var(--fh-h3-image-slot-height); overflow: hidden;
         box-sizing: border-box; padding: 0; border: 1px dashed var(--h3-native-widget-outline, rgba(255,255,255,.18)); border-radius: 7px;
