@@ -6791,7 +6791,7 @@ function install() {
         box-sizing: border-box; padding: 0; border-radius: var(--h3-native-widget-radius, 0); overflow: hidden; contain: size layout paint;
       }
       .h3-prompt-editor {
-        --h3-prompt-text-size: var(--h3-native-widget-text-size, var(--comfy-textarea-font-size, 12px));
+        --h3-prompt-text-size: calc(var(--h3-native-widget-text-size, var(--comfy-textarea-font-size, 12px)) + 2px);
         display: block; width: 100%; height: 100%; min-width: 0; min-height: 0; max-height: 100%; box-sizing: border-box;
         padding: var(--h3-native-widget-padding, 2px);
         padding-bottom: calc(var(--h3-native-widget-padding, 2px) + 24px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
