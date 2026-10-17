@@ -6078,10 +6078,25 @@ function syncEmbeddedMediaResponsiveLayout(node, { resetBaseline = false } = {})
     const modernNodes = isVueNodesMode();
     let state = node.__h3EmbeddedResponsiveLayout;
     if (resetBaseline || !state || state.mode !== modeKey) {
+        // When a workflow tab becomes visible again, Vue Nodes may have
+        // already restored the DOM widget's full host rectangle while the
+        // cached computedHeight is still stale.  Use that live rectangle as
+        // the one-shot baseline so the prompt consumes the space that was
+        // actually allocated, instead of leaving a blank tail in the node.
+        let measuredHostHeight = 0;
+        try {
+            measuredHostHeight = Number(workbench.getBoundingClientRect?.().height) || 0;
+        } catch {
+            measuredHostHeight = 0;
+        }
         state = {
             mode: modeKey,
             nodeHeight: Number.isFinite(nodeHeight) && nodeHeight > 0 ? nodeHeight : 0,
-            hostHeight: Math.max(hostMinHeight, Number(galleryWidget.computedHeight) || hostMinHeight),
+            hostHeight: Math.max(
+                hostMinHeight,
+                Number(galleryWidget.computedHeight) || 0,
+                measuredHostHeight,
+            ),
         };
         node.__h3EmbeddedResponsiveLayout = state;
     }
@@ -6495,6 +6510,16 @@ function installNode(nodeType, nodeData) {
         repairNodeLayout(this);
         syncMediaSlotLayout(this);
         collapseInflatedMediaSlotHeight(this);
+        // onConfigure can run when switching workflow tabs. The legacy slot
+        // height correction above may resize the node after the prompt layout
+        // pass, so consume that final height before the tab becomes visible.
+        syncEmbeddedMediaResponsiveLayout(this, { resetBaseline: true });
+        globalThis.requestAnimationFrame?.(() => {
+            syncEmbeddedMediaResponsiveLayout(this, { resetBaseline: true });
+            // The DOM widget host can receive its final height one frame after
+            // onConfigure. Reconcile once more after that host resize settles.
+            globalThis.requestAnimationFrame?.(() => syncEmbeddedMediaResponsiveLayout(this, { resetBaseline: true }));
+        });
         return result;
     };
 
