@@ -31,7 +31,7 @@ function normalizeSettings(value) {
         id: String(item?.id || `provider_${index + 1}`),
         name: String(item?.name || item?.id || t("自定义 API", "Custom API")),
         description: String(item?.description || ""),
-        api_format: ["openai", "gemini", "ollama"].includes(String(item?.api_format || ""))
+        api_format: ["openai", "gemini", "ollama", "local"].includes(String(item?.api_format || ""))
             ? String(item.api_format)
             : "openai",
         api_url: String(item?.api_url || ""),
@@ -55,6 +55,8 @@ function normalizeSettings(value) {
         prompt: String(item?.prompt || ""),
         editable: Boolean(item?.editable),
     })).filter((item) => item.id);
+    const local = source.local && typeof source.local === "object" ? source.local : {};
+    const catalog = source.local_catalog && typeof source.local_catalog === "object" ? source.local_catalog : {};
     return {
         active_provider: String(source.active_provider || providers[0]?.id || "zhipu"),
         providers,
@@ -62,6 +64,19 @@ function normalizeSettings(value) {
         schemes,
         read_media: Boolean(source.read_media),
         ryan_h3_dual_skill: Boolean(source.ryan_h3_dual_skill),
+        local: {
+            model: String(local.model || ""),
+            mmproj: String(local.mmproj || ""),
+            device: ["auto", "cpu", "cuda"].includes(String(local.device || "")) ? String(local.device) : "auto",
+            max_tokens: numberValue(local.max_tokens, 4096, 1, 16384),
+            context_length: numberValue(local.context_length, 32768, 2048, 131072),
+        },
+        local_catalog: {
+            models: Array.isArray(catalog.models) ? catalog.models : [],
+            projectors: Array.isArray(catalog.projectors) ? catalog.projectors : [],
+            missing_transformers: Array.isArray(catalog.missing_transformers) ? catalog.missing_transformers : [],
+            gguf_available: Boolean(catalog.gguf_available),
+        },
     };
 }
 
@@ -78,6 +93,7 @@ function settingsPayload(state) {
         active_scheme: state.active_scheme,
         read_media: state.read_media,
         ryan_h3_dual_skill: Boolean(state.ryan_h3_dual_skill),
+        local: state.local,
         providers: state.providers.map((provider) => {
             const item = {
                 id: provider.id,
@@ -150,6 +166,8 @@ function mergeSavedState(state, saved) {
     state.active_provider = saved.active_provider;
     state.active_scheme = saved.active_scheme;
     state.read_media = saved.read_media;
+    state.local = saved.local;
+    state.local_catalog = saved.local_catalog;
     for (const provider of state.providers) {
         const updated = saved.providers.find((item) => item.id === provider.id);
         if (!updated) continue;
@@ -157,6 +175,10 @@ function mergeSavedState(state, saved) {
         provider.api_key_masked = updated.api_key_masked;
         provider.ollama_disable_thinking = Boolean(updated.ollama_disable_thinking);
         provider.api_key = "";
+        if (provider.id === "local") {
+            provider.llm_models = saved.providers.find((item) => item.id === "local")?.llm_models || provider.llm_models;
+            provider.vlm_models = saved.providers.find((item) => item.id === "local")?.vlm_models || provider.vlm_models;
+        }
     }
 }
 
@@ -263,6 +285,101 @@ function modelSection(provider, kind, persist, rerender) {
     return section;
 }
 
+function renderLocalDependencies(card, profile, device) {
+    const panel = el("div", "fh-inline-local-dependencies");
+    const controls = el("div", "fh-inline-model-picker-actions");
+    const checkButton = button(t("检查依赖", "Check dependencies"), "fh-inline-primary");
+    const installButton = button(t("安装/修复依赖", "Install / repair dependencies"), "fh-inline-primary");
+    const status = el("p", "fh-inline-local-note", t("正在检查本地模型依赖…", "Checking local model dependencies…"));
+    const details = el("pre", "fh-inline-dependency-log");
+    controls.append(checkButton, installButton);
+    panel.append(el("p", "fh-inline-local-note", t(
+        "使用当前 ComfyUI 的 Python 安装。点击安装会联网下载依赖，保留已有 Torch / NumPy；安装完成后按提示重启 ComfyUI。手动解压安装也可使用节点目录中的 install-local-llm.bat。",
+        "Installs into the Python running ComfyUI. Installation downloads dependencies, preserves existing Torch / NumPy, and may require a restart. Manual ZIP installs can also use install-local-llm.bat in the node folder.",
+    )), controls, status, details);
+    card.append(panel);
+    let installing = false;
+    let checking = false;
+    const setBusy = () => {
+        checkButton.disabled = checking || installing;
+        installButton.disabled = checking || installing;
+    };
+    const request = async (url, options) => {
+        const response = await api.fetchApi(url, options);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        return data;
+    };
+    const showStatus = (result) => {
+        status.textContent = result.ready ? t("本地模型依赖检查通过", "Local model dependency check passed") : t("本地模型依赖尚未就绪", "Local model dependencies are not ready");
+        details.textContent = [
+            `Python: ${result.python || ""}`,
+            result.gguf_version ? `GGUF: ${result.gguf_version} · CUDA: ${result.cuda_offload ? "✓" : "—"}` : "",
+            ...(result.errors || []), ...(result.warnings || []),
+        ].filter(Boolean).join("\n");
+    };
+    const poll = async () => {
+        if (!panel.isConnected) return;
+        try {
+            const data = await request("/feihou_easy_h3/local_dependencies/install");
+            const job = data.job || {};
+            installing = job.state === "running";
+            setBusy();
+            status.textContent = job.message || t("正在安装依赖…", "Installing dependencies…");
+            details.textContent = (job.log || []).join("\n");
+            if (installing) {
+                window.setTimeout(poll, 1500);
+            } else if (job.state === "success") {
+                showStatus(job.status || {});
+                if (job.restart_required) status.textContent = t("依赖安装完成，请重启 ComfyUI 并刷新页面", "Dependencies installed. Restart ComfyUI and reload the page.");
+            } else if (job.state === "error") {
+                status.textContent = job.message || t("依赖安装失败，请查看日志后重试", "Installation failed. Check the log and retry.");
+            }
+        } catch (error) {
+            installing = false;
+            setBusy();
+            status.textContent = String(error?.message || error);
+        }
+    };
+    const check = async () => {
+        checking = true;
+        setBusy();
+        status.textContent = t("正在检查本地模型依赖…", "Checking local model dependencies…");
+        try {
+            const query = new URLSearchParams({ profile, device });
+            const data = await request(`/feihou_easy_h3/local_dependencies?${query}`);
+            showStatus(data.status || {});
+            if (data.job?.state === "running") {
+                installing = true;
+                void poll();
+            }
+        } catch (error) {
+            status.textContent = String(error?.message || error);
+        } finally {
+            checking = false;
+            setBusy();
+        }
+    };
+    checkButton.addEventListener("click", () => { void check(); });
+    installButton.addEventListener("click", async () => {
+        installing = true;
+        setBusy();
+        try {
+            await request("/feihou_easy_h3/local_dependencies/install", {
+                method: "POST", headers: { "Content-Type": "application/json", "X-FeiHou-Dependency-Install": "1" },
+                body: JSON.stringify({ profile, device }),
+            });
+            void poll();
+        } catch (error) {
+            installing = false;
+            setBusy();
+            status.textContent = String(error?.message || error);
+            notify(t("安装依赖失败", "Dependency installation failed"), status.textContent, "error");
+        }
+    });
+    void check();
+}
+
 async function mountInlineSettings(root) {
     root.replaceChildren(el("div", "fh-inline-loading", t("正在读取 Easy H3 设置…", "Loading Easy H3 settings…")));
     let state;
@@ -350,6 +467,119 @@ async function mountInlineSettings(root) {
             heading.append(remove);
         }
         card.append(heading);
+
+        if (provider.id === "local") {
+            const description = el("p", "fh-inline-local-note", t(
+                "本地模型只在 Easy H3 节点打开“提示词优化”后使用；支持 GGUF、完整 Transformers 目录，以及内置架构的裸 safetensors。模型文件放在 ComfyUI/models/llm（或已注册的 llm 模型目录）。",
+                "Local models are used only after Prompt optimization is enabled. GGUF, complete Transformers folders, and bare safetensors with a built-in architecture are supported. Put them in ComfyUI/models/llm or a registered llm model directory.",
+            ));
+            card.append(description);
+
+            const modelSelect = document.createElement("select");
+            const models = Array.isArray(state.local_catalog?.models) ? state.local_catalog.models : [];
+            modelSelect.append(new Option(t("选择本地模型", "Select a local model"), ""));
+            for (const model of models) {
+                const id = String(model?.id || "");
+                if (!id) continue;
+                const format = String(model?.format || "").toUpperCase();
+                const vision = model?.vision ? " · VLM" : " · LLM";
+                const available = model?.available !== false;
+                const suffix = !available
+                    ? model?.status === "unsupported_runtime"
+                        ? t(" · 需要 Transformers 5+", " · Requires Transformers 5+")
+                        : t(" · 需完整模型目录", " · Full model directory required")
+                    : model?.status === "fixed_profile" ? t(" · 内置架构", " · Built-in architecture") : "";
+                const option = new Option(`${model.name || id} · ${format}${vision}${suffix}`, id);
+                option.disabled = !available;
+                modelSelect.append(option);
+            }
+            modelSelect.value = state.local.model || "";
+            modelSelect.addEventListener("change", async () => {
+                state.local.model = modelSelect.value;
+                state.local.mmproj = "";
+                await persist(t("本地模型已保存", "Local model saved"));
+                renderProvider(container);
+            });
+            card.append(field(t("本地模型", "Local model"), modelSelect));
+
+            const projectorSelect = document.createElement("select");
+            projectorSelect.append(new Option(t("自动匹配（推荐）", "Automatic match (recommended)"), ""));
+            for (const projector of (Array.isArray(state.local_catalog?.projectors) ? state.local_catalog.projectors : [])) {
+                const id = String(projector?.id || "");
+                if (id) projectorSelect.append(new Option(String(projector.name || id), id));
+            }
+            projectorSelect.value = state.local.mmproj || "";
+            projectorSelect.addEventListener("change", () => {
+                state.local.mmproj = projectorSelect.value;
+                void persist(t("视觉投影文件已保存", "Vision projector saved"));
+            });
+            card.append(field(t("GGUF 视觉投影文件（可选）", "GGUF vision projector (optional)"), projectorSelect));
+
+            const deviceSelect = document.createElement("select");
+            for (const [value, label] of [["auto", t("自动", "Auto")], ["cuda", "CUDA"], ["cpu", "CPU"]]) deviceSelect.append(new Option(label, value));
+            deviceSelect.value = state.local.device || "auto";
+            deviceSelect.addEventListener("change", async () => {
+                state.local.device = deviceSelect.value;
+                await persist(t("本地设备已保存", "Local device saved"));
+                renderProvider(container);
+            });
+            const maxTokens = input("number", state.local.max_tokens);
+            maxTokens.min = "1"; maxTokens.max = "16384"; maxTokens.step = "1";
+            const contextLength = input("number", state.local.context_length);
+            contextLength.min = "2048"; contextLength.max = "131072"; contextLength.step = "1";
+            const saveLocalLimits = () => {
+                state.local.max_tokens = numberValue(maxTokens.value, 4096, 1, 16384);
+                state.local.context_length = numberValue(contextLength.value, 32768, 2048, 131072);
+                void persist(t("本地模型参数已保存", "Local model parameters saved"));
+            };
+            maxTokens.addEventListener("change", saveLocalLimits);
+            contextLength.addEventListener("change", saveLocalLimits);
+            const localGrid = el("div", "fh-inline-advanced");
+            localGrid.append(field(t("运行设备", "Device"), deviceSelect), field("Max Tokens", maxTokens), field("Context Length", contextLength));
+            card.append(localGrid);
+
+            const actions = el("div", "fh-inline-model-picker-actions");
+            const refresh = button(t("刷新本地模型", "Refresh local models"), "fh-inline-primary");
+            refresh.addEventListener("click", async () => {
+                refresh.disabled = true;
+                try {
+                    const response = await api.fetchApi(`/feihou_easy_h3/providers/${encodeURIComponent(provider.id)}/models`);
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok || !data?.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+                    state.local_catalog = {
+                        models: Array.isArray(data.models) ? data.models : [],
+                        projectors: Array.isArray(data.projectors) ? data.projectors : [],
+                        missing_transformers: Array.isArray(data.missing_transformers) ? data.missing_transformers : [],
+                        gguf_available: Boolean(data.gguf_available),
+                    };
+                    const localProvider = state.providers.find((item) => item.id === "local");
+                    if (localProvider) {
+                        localProvider.llm_models = state.local_catalog.models.filter((item) => item.available !== false && !item.vision).map((item) => String(item.id));
+                        localProvider.vlm_models = state.local_catalog.models.filter((item) => item.available !== false && item.vision).map((item) => String(item.id));
+                    }
+                    await persist(t("本地模型列表已刷新", "Local model list refreshed"));
+                    renderProvider(container);
+                } catch (error) {
+                    notify(t("刷新本地模型失败", "Unable to refresh local models"), String(error?.message || error), "error");
+                } finally {
+                    refresh.disabled = false;
+                }
+            });
+            actions.append(refresh);
+            if (state.local_catalog?.missing_transformers?.length) {
+                actions.append(el("span", "fh-inline-empty", t(
+                    `缺少依赖：${state.local_catalog.missing_transformers.join(", ")}`,
+                    `Missing dependencies: ${state.local_catalog.missing_transformers.join(", ")}`,
+                )));
+            } else if (!models.length) {
+                actions.append(el("span", "fh-inline-empty", t("尚未发现本地模型，请刷新列表。", "No local models found. Refresh the list.")));
+            }
+            card.append(actions);
+            const chosenModel = models.find((item) => String(item.id) === state.local.model);
+            renderLocalDependencies(card, chosenModel ? (chosenModel.format === "gguf" ? "gguf" : "transformers") : "all", state.local.device);
+            container.append(card);
+            return;
+        }
 
         const baseUrl = input("text", provider.api_url);
         baseUrl.placeholder = "https://api.example.com/v1";
@@ -608,26 +838,10 @@ async function mountInlineSettings(root) {
     const title = el("div", "");
     title.append(el("h2", "", t("⚙ API 设置", "⚙ API settings")), el("p", "", t("Base URL 和 API Key 修改后自动保存在本机；API Key 不提供任何默认值。", "Base URL and API key are saved locally. No API key is preconfigured.")));
     top.append(title, status);
-    const allowlistHelp = el("section", "fh-inline-allowlist-help");
-    allowlistHelp.append(
-        el("strong", "", t("自定义 API 域名白名单", "Custom API host allow-list")),
-        el("p", "", t(
-            "内置服务已自动允许。使用新的第三方 API 前，请先在本机 ComfyUI/user/default/ComfyUI-FeiHou-Easy-H3/allowed_api_hosts.json 的 hosts 数组中加入其域名（只填域名，不填 https://、路径或端口），保存后重启 ComfyUI。",
-            "Built-in providers are already allowed. Before using a new third-party API, add its hostname to the hosts array in ComfyUI/user/default/ComfyUI-FeiHou-Easy-H3/allowed_api_hosts.json (hostname only; no https://, path, or port), then restart ComfyUI."
-        )),
-        el("p", "fh-inline-allowlist-note", t(
-            "局域网 API / Ollama：在同一白名单文件增加 lan_endpoints 数组，例如 [\"http://192.168.1.20:11434\", \"http://10.0.0.8:8000\"]。只授权 10/8、172.16/12、192.168/16 内的具体 IP，按协议和端口匹配；条目不填 /v1 等路径。节点 API 地址可以带 /v1。本机 Ollama 无需添加，公网仍要求 HTTPS。",
-            "LAN API / Ollama: add lan_endpoints to the same file, e.g. [\"http://192.168.1.20:11434\", \"http://10.0.0.8:8000\"]. Only exact IP origins in 10/8, 172.16/12 and 192.168/16 are accepted, matching scheme and port. Omit paths such as /v1 from this list; the node URL may contain /v1. Local Ollama needs no entry; public APIs still require HTTPS."
-        )),
-        el("p", "fh-inline-allowlist-note", t(
-            "请在运行 ComfyUI 的机器上修改此文件；网页不能改写白名单。HTTP 是明文，仅授权可信服务。不自动放行整段内网；证书校验和禁止重定向保持不变。目标服务仍需开放监听地址和防火墙端口。",
-            "Edit this file on the ComfyUI server; the web UI cannot change it. HTTP is unencrypted: authorize only trusted services. Entire private subnets are not allowed. TLS verification and redirect restrictions remain enabled. The target service still needs a reachable listener and firewall port."
-        ))
-    );
     const providerContainer = el("div", "fh-inline-provider-container");
     const divider = el("hr", "fh-inline-divider");
     const rulesContainer = el("div", "fh-inline-rules-container");
-    root.append(top, allowlistHelp, providerContainer, divider, rulesContainer);
+    root.append(top, providerContainer, divider, rulesContainer);
     renderProvider(providerContainer);
     renderRules(rulesContainer);
 }
@@ -643,9 +857,8 @@ function installStyles() {
     const style = document.createElement("style");
     style.id = "feihou-easy-h3-inline-settings-style";
     style.textContent = `
-      .fh-inline-settings{display:grid;gap:18px;width:100%;min-width:0;padding:2px 0 24px;color:var(--input-text,#eee);font:14px system-ui,sans-serif}.fh-inline-loading,.fh-inline-error{padding:26px;border:1px solid #3c3f48;border-radius:10px;background:#1b1c20}.fh-inline-error{color:#ff9fa6}.fh-inline-topbar,.fh-inline-main-heading,.fh-inline-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.fh-inline-topbar h2,.fh-inline-main-heading h2{margin:0 0 4px;font-size:20px}.fh-inline-topbar p,.fh-inline-main-heading p{margin:0;color:#8e929d;font-size:12px}.fh-inline-save-status{flex:none;padding:5px 9px;border-radius:999px;background:#282a30;color:#aeb4c0;font-size:11px}.fh-inline-save-status.is-saving{color:#ffd37a}.fh-inline-save-status.is-saved{color:#78df9d}.fh-inline-save-status.is-error{color:#ff9299}.fh-inline-provider-container,.fh-inline-rules-container{display:grid;gap:12px}.fh-inline-provider-tabs{display:flex;flex-wrap:wrap;align-items:stretch;gap:5px}.fh-inline-provider-tab{display:flex;min-width:115px;max-width:190px;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 14px;border:0;border-radius:5px;background:transparent;color:#eee;cursor:pointer}.fh-inline-provider-tab strong{font-size:15px}.fh-inline-provider-tab small{width:100%;overflow:hidden;color:#8e929d;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.fh-inline-provider-tab.is-active{background:#2f83ef;color:#fff}.fh-inline-provider-tab.is-active small{color:#d8e9ff}.fh-inline-provider-add{width:48px;border:0;background:transparent;color:#fff;font-size:27px;cursor:pointer}.fh-inline-provider-card{display:grid;gap:16px;padding:18px;border:1px solid #373a43;border-radius:10px;background:#191a1e}.fh-inline-section-heading h3,.fh-inline-section-heading h4{margin:0;color:#c4c8d1;font-size:16px}.fh-inline-credentials{display:grid;grid-template-columns:1fr;gap:12px}.fh-inline-field{display:grid;gap:5px;min-width:0;color:#b8bdc8;font-size:12px}.fh-inline-field input,.fh-inline-field textarea{box-sizing:border-box;width:100%;min-width:0;padding:11px 12px;border:1px solid #494d58;border-radius:7px;background:#111216;color:#eee;font:inherit}.fh-inline-field input:focus,.fh-inline-field textarea:focus{border-color:#3d8ef5;outline:none}.fh-inline-field input:disabled{opacity:.7}.fh-inline-switches{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:28px;padding:4px 0 12px;border-bottom:1px solid #34363d}.fh-inline-switch{display:flex;align-items:center;gap:10px}.fh-inline-switch input{width:44px;height:23px;accent-color:#2f83ef}.fh-inline-advanced{display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:12px}.fh-inline-advanced[hidden]{display:none}.fh-inline-model-section{display:grid;gap:10px}.fh-inline-model-chips{display:flex;flex-wrap:wrap;gap:8px;min-height:52px;padding:10px;border-radius:11px;background:#292a2e}.fh-inline-model-chip{display:flex;align-items:center;gap:12px;min-height:36px;padding:0 10px;border:0;border-radius:9px;background:#44454d;color:#eee;cursor:pointer}.fh-inline-model-chip.is-active{background:#3285f2}.fh-inline-model-chip span:first-child{display:flex;align-items:center;gap:7px}.fh-inline-model-chip small{padding:1px 5px;background:rgba(255,255,255,.22);font-size:10px}.fh-inline-chip-remove{font-size:18px;opacity:.85}.fh-inline-empty{align-self:center;color:#8d929c;font-size:12px}.fh-inline-model-picker{display:grid;gap:9px;padding:12px;border:1px solid #434853;border-radius:9px;background:#222329}.fh-inline-model-picker>input{box-sizing:border-box;width:100%;padding:9px 11px;border:1px solid #4a4f5b;border-radius:7px;background:#111216;color:#eee}.fh-inline-model-picker-list{display:grid;gap:2px;max-height:260px;overflow-y:auto}.fh-inline-model-option{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:5px;cursor:pointer}.fh-inline-model-option:hover{background:#30333a}.fh-inline-model-option input{width:17px;height:17px;accent-color:#2f83ef}.fh-inline-model-picker-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px}.fh-inline-model-count{margin-right:auto;color:#8d929c;font-size:11px}.fh-inline-primary,.fh-inline-secondary,.fh-inline-danger{min-height:34px;padding:0 13px;border:1px solid rgba(255,255,255,.14);border-radius:7px;background:#2f83ef;color:#fff;cursor:pointer}.fh-inline-secondary{background:#292a2f}.fh-inline-danger{background:#44262b;color:#ffb7bc}.fh-inline-primary:disabled{opacity:.55;cursor:wait}.fh-inline-divider{width:100%;margin:10px 0;border:0;border-top:1px solid #3a3d45}.fh-inline-rule-table{display:grid;border:1px solid #40434c;border-radius:7px;overflow:hidden}.fh-inline-rule-row{display:grid;grid-template-columns:72px 160px minmax(260px,1fr) 92px;min-height:43px;border-top:1px solid #3b3e46}.fh-inline-rule-row:first-child{border-top:0}.fh-inline-rule-row>div{display:flex;align-items:center;min-width:0;padding:8px 11px;border-left:1px solid #3b3e46}.fh-inline-rule-row>div:first-child{border-left:0}.fh-inline-rule-row.is-header{min-height:38px;background:#292a2f;font-weight:700}.fh-inline-rule-status,.fh-inline-rule-actions{justify-content:center}.fh-inline-rule-status input{width:18px;height:18px;accent-color:#20cf78}.fh-inline-rule-name,.fh-inline-rule-content{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fh-inline-rule-actions{gap:5px}.fh-inline-icon-button{border:0;background:transparent;color:#a9c8ff;font-size:21px;cursor:pointer}.fh-inline-rule-editor{display:grid;gap:12px;padding:16px;border:1px solid #40434c;border-radius:8px;background:#202126}.fh-inline-rule-editor h3{margin:0}.fh-inline-rule-editor textarea{min-height:230px;resize:vertical;line-height:1.5}.fh-inline-rule-editor-actions{display:flex;justify-content:flex-end;gap:10px}.fh-inline-ryan-card{display:grid;gap:8px;padding:14px 16px;border:1px solid #2f83ef55;border-radius:9px;background:#1d2530}.fh-inline-ryan-head{display:flex;align-items:center;justify-content:space-between;gap:12px}.fh-inline-ryan-head strong{color:#fff;font-size:15px}.fh-inline-ryan-status{padding:3px 9px;border-radius:999px;background:#1f5138;color:#7ce8a9;font-size:11px}.fh-inline-ryan-line{color:#c4c8d1;font-size:12px}.fh-inline-ryan-line code{padding:2px 7px;border-radius:5px;background:#111216;color:#8fd0ff;font-size:11px}.fh-inline-ryan-note{color:#8e929d;font-size:11px;line-height:1.5}.fh-inline-ryan-switch{justify-content:flex-end;margin-top:4px;color:#c4c8d1;font-size:12px}@media(max-width:780px){.fh-inline-provider-tab{min-width:100px}.fh-inline-advanced{grid-template-columns:1fr}.fh-inline-rule-row{grid-template-columns:52px 110px minmax(150px,1fr) 72px}.fh-inline-topbar,.fh-inline-main-heading{align-items:flex-start;flex-direction:column}}
-    `;
-    style.textContent += ".fh-inline-allowlist-help{display:grid;gap:6px;padding:13px 15px;border:1px solid #4e5570;border-radius:9px;background:#1c2130;color:#cbd4e8}.fh-inline-allowlist-help strong{color:#dce8ff}.fh-inline-allowlist-help p{margin:0;font-size:12px;line-height:1.55}.fh-inline-allowlist-note{color:#aeb9d2}";
+      .fh-inline-local-dependencies{display:grid;gap:12px;border-top:1px solid #373a43;padding-top:16px;min-width:0}.fh-inline-dependency-log{margin:0;padding:10px;border-radius:7px;background:#111216;white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto;color:#aeb4c0;font:12px monospace}
+      .fh-inline-settings{display:grid;gap:18px;width:100%;min-width:0;padding:2px 0 24px;color:var(--input-text,#eee);font:14px system-ui,sans-serif}.fh-inline-loading,.fh-inline-error{padding:26px;border:1px solid #3c3f48;border-radius:10px;background:#1b1c20}.fh-inline-error{color:#ff9fa6}.fh-inline-topbar,.fh-inline-main-heading,.fh-inline-section-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.fh-inline-topbar h2,.fh-inline-main-heading h2{margin:0 0 4px;font-size:20px}.fh-inline-topbar p,.fh-inline-main-heading p{margin:0;color:#8e929d;font-size:12px}.fh-inline-save-status{flex:none;padding:5px 9px;border-radius:999px;background:#282a30;color:#aeb4c0;font-size:11px}.fh-inline-save-status.is-saving{color:#ffd37a}.fh-inline-save-status.is-saved{color:#78df9d}.fh-inline-save-status.is-error{color:#ff9299}.fh-inline-provider-container,.fh-inline-rules-container{display:grid;gap:12px}.fh-inline-provider-tabs{display:flex;flex-wrap:wrap;align-items:stretch;gap:5px}.fh-inline-provider-tab{display:flex;min-width:115px;max-width:190px;flex-direction:column;align-items:flex-start;gap:2px;padding:10px 14px;border:0;border-radius:5px;background:transparent;color:#eee;cursor:pointer}.fh-inline-provider-tab strong{font-size:15px}.fh-inline-provider-tab small{width:100%;overflow:hidden;color:#8e929d;font-size:11px;text-overflow:ellipsis;white-space:nowrap}.fh-inline-provider-tab.is-active{background:#2f83ef;color:#fff}.fh-inline-provider-tab.is-active small{color:#d8e9ff}.fh-inline-provider-add{width:48px;border:0;background:transparent;color:#fff;font-size:27px;cursor:pointer}.fh-inline-provider-card{display:grid;gap:16px;padding:18px;border:1px solid #373a43;border-radius:10px;background:#191a1e}.fh-inline-section-heading h3,.fh-inline-section-heading h4{margin:0;color:#c4c8d1;font-size:16px}.fh-inline-credentials{display:grid;grid-template-columns:1fr;gap:12px}.fh-inline-field{display:grid;gap:5px;min-width:0;color:#b8bdc8;font-size:12px}.fh-inline-field input,.fh-inline-field textarea,.fh-inline-field select{box-sizing:border-box;width:100%;min-width:0;padding:11px 12px;border:1px solid #494d58;border-radius:7px;background:#111216;color:#eee;font:inherit}.fh-inline-field input:focus,.fh-inline-field textarea:focus,.fh-inline-field select:focus{border-color:#3d8ef5;outline:none}.fh-inline-field input:disabled{opacity:.7}.fh-inline-local-note{margin:-4px 0 0;color:#8e929d;font-size:12px;line-height:1.5}.fh-inline-switches{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:28px;padding:4px 0 12px;border-bottom:1px solid #34363d}.fh-inline-switch{display:flex;align-items:center;gap:10px}.fh-inline-switch input{width:44px;height:23px;accent-color:#2f83ef}.fh-inline-advanced{display:grid;grid-template-columns:repeat(3,minmax(140px,1fr));gap:12px}.fh-inline-advanced[hidden]{display:none}.fh-inline-model-section{display:grid;gap:10px}.fh-inline-model-chips{display:flex;flex-wrap:wrap;gap:8px;min-height:52px;padding:10px;border-radius:11px;background:#292a2e}.fh-inline-model-chip{display:flex;align-items:center;gap:12px;min-height:36px;padding:0 10px;border:0;border-radius:9px;background:#44454d;color:#eee;cursor:pointer}.fh-inline-model-chip.is-active{background:#3285f2}.fh-inline-model-chip span:first-child{display:flex;align-items:center;gap:7px}.fh-inline-model-chip small{padding:1px 5px;background:rgba(255,255,255,.22);font-size:10px}.fh-inline-chip-remove{font-size:18px;opacity:.85}.fh-inline-empty{align-self:center;color:#8d929c;font-size:12px}.fh-inline-model-picker{display:grid;gap:9px;padding:12px;border:1px solid #434853;border-radius:9px;background:#222329}.fh-inline-model-picker>input{box-sizing:border-box;width:100%;padding:9px 11px;border:1px solid #4a4f5b;border-radius:7px;background:#111216;color:#eee}.fh-inline-model-picker-list{display:grid;gap:2px;max-height:260px;overflow-y:auto}.fh-inline-model-option{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:5px;cursor:pointer}.fh-inline-model-option:hover{background:#30333a}.fh-inline-model-option input{width:17px;height:17px;accent-color:#2f83ef}.fh-inline-model-picker-actions{display:flex;align-items:center;justify-content:flex-end;gap:9px}.fh-inline-model-count{margin-right:auto;color:#8d929c;font-size:11px}.fh-inline-primary,.fh-inline-secondary,.fh-inline-danger{min-height:34px;padding:0 13px;border:1px solid rgba(255,255,255,.14);border-radius:7px;background:#2f83ef;color:#fff;cursor:pointer}.fh-inline-secondary{background:#292a2f}.fh-inline-danger{background:#44262b;color:#ffb7bc}.fh-inline-primary:disabled{opacity:.55;cursor:wait}.fh-inline-divider{width:100%;margin:10px 0;border:0;border-top:1px solid #3a3d45}.fh-inline-rule-table{display:grid;border:1px solid #40434c;border-radius:7px;overflow:hidden}.fh-inline-rule-row{display:grid;grid-template-columns:72px 160px minmax(260px,1fr) 92px;min-height:43px;border-top:1px solid #3b3e46}.fh-inline-rule-row:first-child{border-top:0}.fh-inline-rule-row>div{display:flex;align-items:center;min-width:0;padding:8px 11px;border-left:1px solid #3b3e46}.fh-inline-rule-row>div:first-child{border-left:0}.fh-inline-rule-row.is-header{min-height:38px;background:#292a2f;font-weight:700}.fh-inline-rule-status,.fh-inline-rule-actions{justify-content:center}.fh-inline-rule-status input{width:18px;height:18px;accent-color:#20cf78}.fh-inline-rule-name,.fh-inline-rule-content{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.fh-inline-rule-actions{gap:5px}.fh-inline-icon-button{border:0;background:transparent;color:#a9c8ff;font-size:21px;cursor:pointer}.fh-inline-rule-editor{display:grid;gap:12px;padding:16px;border:1px solid #40434c;border-radius:8px;background:#202126}.fh-inline-rule-editor h3{margin:0}.fh-inline-rule-editor textarea{min-height:230px;resize:vertical;line-height:1.5}.fh-inline-rule-editor-actions{display:flex;justify-content:flex-end;gap:10px}@media(max-width:780px){.fh-inline-provider-tab{min-width:100px}.fh-inline-advanced{grid-template-columns:1fr}.fh-inline-rule-row{grid-template-columns:52px 110px minmax(150px,1fr) 72px}.fh-inline-topbar,.fh-inline-main-heading{align-items:flex-start;flex-direction:column}}    `;
     document.head.append(style);
 }
 

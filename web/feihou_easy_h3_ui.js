@@ -4,6 +4,15 @@ import { api } from "../../scripts/api.js";
 // FeiHou Easy H3 frontend: embedded media gallery and prompt references.
 
 const NODE_CLASS = "FeiHouEasyH3";
+// Split edition: media gallery node + setup node (all other behaviour shared).
+const MEDIA_CLASS = "FeiHouEasyH3Media";
+const CORE_CLASS = "FeiHouEasyH3Setup";
+// Setup has no widgets beyond the main node's; continuation lives in the
+// separate FeiHou Easy H3 Continuous node.
+const CONTINUOUS_SETUP_WIDGET_NAMES = [];
+const CORE_MEDIA_INPUT = "h3_media";
+const CORE_TITLE = "FeiHou Easy H3 Setup";
+const MEDIA_TITLE = "FeiHou Easy H3 Media";
 const LOADER_CLASS = "FeiHouEasyH3Loader";
 const REMIX_LOADER_CLASS = "FeiHouEasyH3RemixLoader";
 const UNIFIED_LOADER_CLASS = "FeiHouEasyH3UnifiedLoader";
@@ -26,6 +35,8 @@ const PROMPT_OPTIMIZER_SETTINGS_DEFAULTS = Object.freeze({
     custom_schemes: [],
     schemes: [],
     read_media: false,
+    local: { model: "", mmproj: "", device: "auto", max_tokens: 4096, context_length: 32768 },
+    local_catalog: { models: [], projectors: [], missing_transformers: [], gguf_available: false },
 });
 let promptOptimizerSettingsCache = { ...PROMPT_OPTIMIZER_SETTINGS_DEFAULTS };
 let promptOptimizerSettingsLoaded = false;
@@ -36,6 +47,7 @@ const DIALOGUE_CLASS = "h3-dialogue-block";
 const PROMPT_VIEW_STRUCTURED = "structured";
 const PROMPT_VIEW_RAW = "raw";
 const PROMPT_GUIDES = [
+    { value: "refmod", zh: "RefMod", en: "RefMod" },
     { value: "none", zh: "\u4ec5\u901a\u7528\u65b9\u6848", en: "General only" },
     { value: "r2va_enhanced", zh: "R2VA \u52a0\u5f3a\u7248", en: "R2VA Enhanced" },
     { value: "3d_animation_short", zh: "3D \u52a8\u753b\u77ed\u7247", en: "3D Animation Short" },
@@ -366,8 +378,63 @@ function nodeMatchesClass(node, className, displayName, installedMarker) {
     return identity === className;
 }
 
+// Serialized workflow data must be plain JSON. node.properties is reactive in
+// the new frontend, so values read from it can be Vue Proxies, which break
+// structuredClone (e.g. when a workflow is loaded from a saved video).
+function plainCopy(value) {
+    if (value === undefined) return undefined;
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return value;
+    }
+}
+
 function isTarget(node) {
-    return nodeMatchesClass(node, NODE_CLASS, TEXT.mainTitle, "__feihouStandardH3EasyNodeInstalled");
+    return nodeMatchesClass(node, NODE_CLASS, TEXT.mainTitle, "__feihouStandardH3EasyNodeInstalled")
+        || nodeMatchesClass(node, CORE_CLASS, CORE_TITLE, "__feihouStandardH3EasyNodeInstalled");
+}
+
+function isCoreNode(node) {
+    return nodeMatchesClass(node, CORE_CLASS, CORE_TITLE, "__feihouStandardH3EasyNodeInstalled");
+}
+
+function isMediaNode(node) {
+    return nodeMatchesClass(node, MEDIA_CLASS, MEDIA_TITLE, "__feihouStandardH3MediaNodeInstalled");
+}
+
+// The Media node that feeds a Core node (direct link, Reroute, or KJ Set/Get).
+function mediaHostNode(node, depth = 0) {
+    if (!node || depth > 8) return null;
+    if (isMediaNode(node)) return node;
+    const graph = node.graph || app.graph;
+    let input = null;
+    if (isCoreNode(node)) input = (node.inputs || []).find((item) => String(item?.name || "") === CORE_MEDIA_INPUT);
+    else if (String(node.type || "") === "Reroute") input = node.inputs?.[0];
+    else if (String(node.type || "") === "GetNode") {
+        const name = node.widgets?.[0]?.value;
+        const setter = (graph?._nodes || []).find((item) => String(item?.type || "") === "SetNode" && item.widgets?.[0]?.value === name);
+        return setter ? mediaHostNode(setter, depth + 1) : null;
+    } else if (String(node.type || "") === "SetNode") input = node.inputs?.[0];
+    if (!input || input.link == null) return null;
+    const link = getNativeGraphLink(graph, input.link);
+    const originId = link?.origin_id ?? link?.originId;
+    const origin = originId == null ? null : graph?.getNodeById?.(originId);
+    return origin ? mediaHostNode(origin, depth + 1) : null;
+}
+
+// Where media edits for this node are stored (Core -> its Media node).
+function mediaStoreNode(node) {
+    return isCoreNode(node) ? mediaHostNode(node) : node;
+}
+
+function notifyMediaConsumers(mediaNode) {
+    for (const node of app.graph?._nodes || []) {
+        if (!isCoreNode(node) || mediaHostNode(node) !== mediaNode) continue;
+        syncAudioDurationAuto(node);
+        renderEditorFromNode(node);
+    }
+    requestMentionPreviewRefresh();
 }
 
 function isLoader(node) {
@@ -539,10 +606,13 @@ function localizeNodeInstance(node) {
     }
     if (isOutput(node)) {
         node.title = TEXT.outputTitle;
+        if (!(node.outputs || []).some((output) => output.name === "reference_map")) {
+            node.addOutput?.("reference_map", "STRING");
+        }
         for (const input of node.inputs || []) {
             if (input.name === "h3_context") setLocalizedSlotLabel(input, TEXT.outputContext);
         }
-        const outputLabels = { positive: TEXT.outputConditioning, latent: TEXT.outputLatent, clip: TEXT.outputClip, video_vae: TEXT.outputVideoVae, audio_vae: TEXT.outputAudioVae, audio_1: TEXT.outputAudio1, fps: TEXT.outputFps, prompt_preview: TEXT.outputPromptPreview };
+        const outputLabels = { positive: TEXT.outputConditioning, latent: TEXT.outputLatent, clip: TEXT.outputClip, video_vae: TEXT.outputVideoVae, audio_vae: TEXT.outputAudioVae, audio_1: TEXT.outputAudio1, fps: TEXT.outputFps, prompt_preview: TEXT.outputPromptPreview, reference_map: isChineseComfyLocale() ? "RefMod 编号对应表" : "RefMod reference map" };
         for (const output of node.outputs || []) {
             const key = String(output.name || "").toLowerCase();
             if (outputLabels[key]) setLocalizedSlotLabel(output, outputLabels[key]);
@@ -558,7 +628,10 @@ function localizeNodeInstance(node) {
     if (!(node.inputs || []).some((input) => input.name === "prompt")) {
         node.addInput?.("prompt", "STRING", { widget: { name: "prompt" } });
     }
-    node.title = TEXT.mainTitle;
+    if (!(node.inputs || []).some((input) => input.name === "refmods")) {
+        node.addInput?.("refmods", "H3_REF_MODS");
+    }
+    node.title = isCoreNode(node) ? CORE_TITLE : TEXT.mainTitle;
     const labels = { mode: TEXT.mode, prompt: TEXT.prompt, resolution: TEXT.resolution, aspect_ratio: TEXT.aspectRatio, width: TEXT.width, height: TEXT.height, audio_duration_auto: TEXT.audioDurationAuto, seconds: TEXT.seconds, advanced: TEXT.advanced, force_offload: TEXT.forceOffload, low_vram_streamed_attention: TEXT.lowVramStreamedAttention, reference_text_only: TEXT.referenceTextOnly, prompt_optimizer_enabled: TEXT.promptOptimizerEnabled, prompt_optimizer_provider: TEXT.promptOptimizerProvider, prompt_optimizer_scene_guide: TEXT.promptOptimizerSceneGuide, fps: TEXT.fps, keyframe_role: TEXT.keyframeRole, ref_image_size: TEXT.refImageSize, reference_mention_mode: TEXT.referenceMentionMode };
     for (const widget of node.widgets || []) {
         if (labels[widget.name]) widget.label = labels[widget.name];
@@ -567,6 +640,7 @@ function localizeNodeInstance(node) {
     for (const input of node.inputs || []) {
         if (input.name === "h3_bundle") setLocalizedSlotLabel(input, TEXT.bundle);
         if (input.name === "production_shot") setLocalizedSlotLabel(input, isChineseComfyLocale() ? "制作包分镜" : "Production shot");
+        if (input.name === "refmods") setLocalizedSlotLabel(input, "RefMod");
         if (input.name === "media") setLocalizedSlotLabel(input, TEXT.inputMedia);
         const parsed = parseMediaSlotName(input.name);
         if (parsed) setLocalizedSlotLabel(input, `${LABELS[parsed.mediaType] || parsed.mediaType}${parsed.ordinal}`);
@@ -615,6 +689,7 @@ function asBoolean(value, fallback = false) {
 }
 
 function isReferenceMode(node) {
+    if (isMediaNode(node)) return true;
     return canonicalOption("mode", getWidgetValue(node, "mode", MODE_IMAGE)) === MODE_REFERENCE;
 }
 
@@ -916,6 +991,10 @@ function embeddedSyntheticSourceId(mediaType, ordinal) {
 }
 
 function ensureEmbeddedMedia(node) {
+    if (isCoreNode(node)) {
+        const host = mediaHostNode(node);
+        return host ? ensureEmbeddedMedia(host) : [];
+    }
     node.properties ||= {};
     const source = Array.isArray(node.properties[EMBEDDED_MEDIA_PROP])
         ? node.properties[EMBEDDED_MEDIA_PROP]
@@ -1027,6 +1106,11 @@ function embeddedMediaFilename(item) {
 }
 
 function setEmbeddedMedia(node, mediaType, ordinal, value) {
+    if (isCoreNode(node)) {
+        const host = mediaHostNode(node);
+        if (host) setEmbeddedMedia(host, mediaType, ordinal, value);
+        return;
+    }
     stopEmbeddedAudioPreview(node);
     const key = embeddedMediaKey(mediaType, ordinal);
     const current = ensureEmbeddedMedia(node);
@@ -1066,6 +1150,10 @@ function audioTrimParts(value) {
 }
 
 function setEmbeddedAudioTrim(node, ordinal, value, mediaType = "audio") {
+    if (isCoreNode(node)) {
+        const host = mediaHostNode(node);
+        return host ? setEmbeddedAudioTrim(host, ordinal, value, mediaType) : normalizeAudioTrimRange(value);
+    }
     stopEmbeddedAudioPreview(node);
     const normalized = normalizeAudioTrimRange(value);
     const records = ensureEmbeddedMedia(node);
@@ -1094,6 +1182,10 @@ function embeddedMediaDragPayload(event) {
 }
 
 function reorderEmbeddedMedia(node, mediaType, sourceOrdinal, targetOrdinal) {
+    if (isCoreNode(node)) {
+        const host = mediaHostNode(node);
+        return host ? reorderEmbeddedMedia(host, mediaType, sourceOrdinal, targetOrdinal) : false;
+    }
     if (mediaType !== "image" && mediaType !== "video" && mediaType !== "audio") return false;
     if (sourceOrdinal === targetOrdinal) return false;
     const allRecords = ensureEmbeddedMedia(node);
@@ -2146,17 +2238,90 @@ function promptInputIsConnected(node) {
     return promptInputSlot(node)?.link != null;
 }
 
+function refmodsInputIsConnected(node) {
+    return (node?.inputs || []).some((input) => input.name === "refmods" && input.link != null);
+}
+
+let refmodCatalog = new Map();
+let refmodCatalogRequest = null;
+let refmodCatalogUpdatedAt = 0;
+
+async function refreshRefmodCatalog(force = false) {
+    if (refmodCatalogRequest) return refmodCatalogRequest;
+    if (!force && Date.now() - refmodCatalogUpdatedAt < 5000) return;
+    refmodCatalogUpdatedAt = Date.now();
+    refmodCatalogRequest = (async () => {
+        const response = await api.fetchApi("/feihou_easy_h3/refmods");
+        if (!response.ok) throw new Error(`RefMod metadata: ${response.status}`);
+        const data = await response.json();
+        const next = new Map((data.references || []).map(entry => [entry.name, entry.members]));
+        const changed = JSON.stringify([...next]) !== JSON.stringify([...refmodCatalog]);
+        refmodCatalog = next;
+        if (changed) requestMentionPreviewRefresh();
+    })().catch(error => console.warn("Easy H3: could not refresh RefMod references", error))
+        .finally(() => { refmodCatalogRequest = null; });
+    return refmodCatalogRequest;
+}
+
+function refmodSourceNode(node, depth = 0) {
+    if (!node || depth > 16 || node.mode === 2 || node.mode === 4) return null;
+    const type = String(node.comfyClass || node.type || "");
+    if (["MiniMaxH3RefModsLoader", "MiniMaxH3RefModsAxis"].includes(type)) return node;
+    const graph = node.graph || app.graph;
+    if (type === "GetNode") {
+        const setter = (graph?._nodes || []).find(item => item.type === "SetNode" && item.widgets?.[0]?.value === node.widgets?.[0]?.value);
+        return refmodSourceNode(setter, depth + 1);
+    }
+    const input = isTarget(node) ? (node.inputs || []).find(item => item.name === "refmods")
+        : ["Reroute", "SetNode", "MiniMaxH3RefModSave", "MiniMaxH3RefModBundleSave"].includes(type) ? node.inputs?.[0] : null;
+    if (input?.link == null) return null;
+    const link = getNativeGraphLink(graph, input.link);
+    return refmodSourceNode(graph?.getNodeById?.(link?.origin_id ?? link?.originId), depth + 1);
+}
+
+function refmodReferences(node) {
+    const source = refmodSourceNode(node);
+    if (!source) return [];
+    const axis = String(source.comfyClass || source.type) === "MiniMaxH3RefModsAxis";
+    const refs = [];
+    for (let slot = 1; slot <= 8; slot++) {
+        const value = Number(getWidgetValue(source, axis ? `value_${slot}` : `strength_${slot}`, axis ? 0 : 1));
+        if (!Number.isFinite(value) || (axis ? Math.abs(value) < 1e-6 : value <= 0)) continue;
+        const name = String(getWidgetValue(source, axis ? `mod_${value > 0 ? "b" : "a"}_${slot}` : `mod_${slot}`, "(none)"));
+        const selection = String(getWidgetValue(source, `components_${slot}`, "All"));
+        const members = refmodCatalog.get(name) || [];
+        const copies = axis ? 1 : Number(getWidgetValue(source, `copies_${slot}`, 1));
+        for (const member of members) {
+            const component = member.kind === "audio" ? "Audio" : "Visual";
+            if (selection !== "All" && selection !== component) continue;
+            if (Number(getWidgetValue(source, `${component.toLowerCase()}_strength_${slot}`, 1)) <= 0) continue;
+            for (let copy = 0; copy < copies; copy++) refs.push({
+                type: member.kind, fullLabel: `${member.name} · RefMod`, source: `RefMod · ${name}`,
+                sourceId: source.id, sourceSlot: slot,
+                refmodKey: `${source.id}:${slot}:${name}:${member.index}:${copy}`, previewUrl: "",
+            });
+        }
+    }
+    return refs;
+}
+
 function buildRuntimePrompt(node, runtimeLinks) {
     const promptWidget = getWidget(node, "prompt");
     const fallback = String(promptWidget?.value || "");
     const doc = node?.properties?.[PROMPT_DOC_PROP];
     if (!Array.isArray(doc?.parts)) return fallback;
+    const options = mentionOptions(node);
     return doc.parts.map((part) => {
         if (part?.type === "dialogue") return `<d>${String(part.text || "")}</d>`;
         if (part?.type !== "mention") return String(part?.text || "");
         const mediaType = String(part.mediaType || "image").toLowerCase();
+        const option = findMentionOption(options, part, referenceMentionMode(node));
+        if (part.refmodKey || option?.refmodKey) {
+            return option ? option.tag : `${UNRESOLVED_REF_PREFIX}${mediaType}__`;
+        }
         const partSourceId = part.sourceId != null && Number.isFinite(Number(part.sourceId)) ? Number(part.sourceId) : null;
-        const partOrdinal = Number(part.ordinal);
+        const modCount = options.filter(item => item.refmodKey && item.type === mediaType).length;
+        const partOrdinal = Number(part.ordinal) - modCount;
         let index = -1;
         if ((referenceMentionMode(node) === "index" || partSourceId == null) && Number.isFinite(partOrdinal) && partOrdinal > 0) {
             let ordinal = 0;
@@ -2179,6 +2344,10 @@ function buildRuntimePrompt(node, runtimeLinks) {
         }
         if (index >= 0) return `${RUNTIME_REF_PREFIX}${index + 1}__`;
         if (!isReferenceMode(node)) return String(part.tag || part.token || "");
+        // Direct official tags can also come from connected Create/Master nodes.
+        if (refmodsInputIsConnected(node) && partSourceId == null && Number.isInteger(partOrdinal) && partOrdinal > 0) {
+            return promptMentionTag(mediaType, Number(part.ordinal));
+        }
         return `${UNRESOLVED_REF_PREFIX}${mediaType}__`;
     }).join("");
 }
@@ -2188,6 +2357,9 @@ function patchGraphToPrompt() {
     patchedPrompt = true;
     const original = app.graphToPrompt;
     app.graphToPrompt = async function graphToPromptWithOrderedMedia() {
+        if ((app.graph?._nodes || []).some(node => isTarget(node) && refmodsInputIsConnected(node))) {
+            await refreshRefmodCatalog(true);
+        }
         const promptData = await original.apply(this, arguments);
         const output = promptData?.output || {};
         for (const node of app.graph?._nodes || []) {
@@ -2378,10 +2550,17 @@ function truncateMentionLabel(value, maxLength = 22) {
 
 function mentionOptions(node) {
     if (!isReferenceMode(node)) return [];
+    if (refmodsInputIsConnected(node)) void refreshRefmodCatalog();
     const orderedLinks = embeddedMediaRecords(node);
     const counts = { image: 0, video: 0, audio: 0 };
     const mode = referenceMentionMode(node);
-    return orderedLinks.map((link) => {
+    const mods = refmodReferences(node).map(ref => {
+        const ordinal = ++counts[ref.type];
+        const label = mode === "index" ? `${LABELS[ref.type] || ref.type}${ordinal}` : truncateMentionLabel(ref.fullLabel);
+        return { ...ref, ordinal, label, tag: promptMentionTag(ref.type, ordinal),
+            token: `@${mode === "index" ? label : ref.fullLabel}`, referenceMode: mode };
+    });
+    return [...mods, ...orderedLinks.map((link) => {
         const type = String(link.media_type || "image");
         counts[type] = (counts[type] || 0) + 1;
         const ordinal = counts[type];
@@ -2402,19 +2581,23 @@ function mentionOptions(node) {
             sourceSlot: Number(link.source_slot) || 0,
             previewUrl: type === "image" ? viewUrl : type === "video" ? (link.previewUrl || getVideoFrameThumbnail(viewUrl)) : "",
         };
-    });
+    })];
 }
 
 function findMentionOption(options, reference, mode) {
+    if (reference?.refmodKey) return options.find(item => item.refmodKey === reference.refmodKey) || null;
     const type = String(reference?.mediaType || reference?.type || "image").toLowerCase();
     const ordinal = Number(reference?.ordinal);
     const rawSourceId = reference?.sourceId;
     const sourceId = rawSourceId == null || rawSourceId === "" ? Number.NaN : Number(rawSourceId);
     const sourceSlot = Number(reference?.sourceSlot) || 0;
     const findByOrdinal = () => Number.isFinite(ordinal) && ordinal > 0
-        ? options.find((item) => item.type === type && Number(item.ordinal) === ordinal)
+        ? options.find((item) => item.type === type && Number(item.ordinal) === ordinal
+            && (!Number.isFinite(sourceId) || !item.refmodKey))
         : null;
-    if (mode === "index") return findByOrdinal();
+    if (mode === "index") return findByOrdinal() || (Number.isFinite(sourceId)
+        ? options.find(item => !item.refmodKey && Number(item.sourceId) === sourceId
+            && Number(item.sourceSlot) === sourceSlot && item.type === type) || null : null);
     if (Number.isFinite(sourceId)) {
         return options.find((item) => Number(item.sourceId) === sourceId
             && Number(item.sourceSlot) === sourceSlot
@@ -2484,6 +2667,7 @@ function refreshMentionPreviews() {
                 ordinal,
                 sourceId,
                 sourceSlot: Number(chip.dataset.sourceSlot) || 0,
+                refmodKey: chip.dataset.refmodKey || "",
             }, currentMode);
             updateMentionChip(chip, option || {
                 type: chip.dataset.mediaType || "image",
@@ -2494,6 +2678,7 @@ function refreshMentionPreviews() {
                 ordinal,
                 sourceId,
                 sourceSlot: Number(chip.dataset.sourceSlot) || 0,
+                refmodKey: chip.dataset.refmodKey || "",
                 previewUrl: "",
                 unresolved: true,
                 pending: sourceId == null && ordinal != null,
@@ -2531,6 +2716,7 @@ function updateMentionChip(chip, option) {
     chip.dataset.pendingReference = option.pending ? "true" : "";
     if (option.sourceId != null) chip.dataset.sourceId = String(option.sourceId);
     if (option.sourceSlot != null) chip.dataset.sourceSlot = String(Number(option.sourceSlot) || 0);
+    chip.dataset.refmodKey = option.refmodKey || "";
     chip.dataset.previewUrl = nextPreviewUrl;
     chip.title = option.pending
         ? (ZH_BROWSER ? "\u7b49\u5f85\u8fde\u63a5\u5bf9\u5e94\u5e8f\u53f7\u7684\u5a92\u4f53\u7d20\u6750" : "Waiting for media with the matching index")
@@ -2797,6 +2983,7 @@ function makeMentionChip(option) {
     chip.dataset.ordinal = Number(option.ordinal) || "";
     chip.dataset.sourceId = option.sourceId != null ? String(option.sourceId) : "";
     chip.dataset.sourceSlot = String(option.sourceSlot || 0);
+    chip.dataset.refmodKey = option.refmodKey || "";
     chip.dataset.previewUrl = option.previewUrl || "";
     chip.dataset.pendingReference = option.pending ? "true" : "";
     chip.title = option.pending
@@ -2945,6 +3132,7 @@ function promptPartsFromText(node, value) {
             ordinal: Number(option.ordinal) || null,
             sourceId: option.sourceId != null ? Number(option.sourceId) : null,
             sourceSlot: Number(option.sourceSlot) || 0,
+            refmodKey: option.refmodKey || "",
             previewUrl: option.previewUrl || "",
             unresolved: Boolean(option.unresolved),
             pending: Boolean(option.pending),
@@ -3034,6 +3222,7 @@ function serializeEditorDoc(editor) {
                 ordinal: Number(item.dataset.ordinal) || null,
                 sourceId: item.dataset.sourceId ? Number(item.dataset.sourceId) : null,
                 sourceSlot: Number(item.dataset.sourceSlot) || 0,
+                refmodKey: item.dataset.refmodKey || "",
                 previewUrl: item.dataset.previewUrl || "",
             });
             return;
@@ -3097,6 +3286,7 @@ function renderEditorFromNode(node, force = false) {
             ordinal: partOrdinal,
             sourceId: partSourceId,
             sourceSlot: Number(part.sourceSlot) || 0,
+            refmodKey: part.refmodKey || "",
         }, currentMode);
         editor.append(makeMentionChip({
             type: part.mediaType || option?.type || "image",
@@ -3108,6 +3298,7 @@ function renderEditorFromNode(node, force = false) {
             ordinal: option?.ordinal ?? part.ordinal,
             sourceId: option?.sourceId ?? part.sourceId,
             sourceSlot: option?.sourceSlot ?? part.sourceSlot ?? 0,
+            refmodKey: option?.refmodKey || part.refmodKey || "",
             previewUrl: option?.previewUrl || "",
             unresolved: !option,
             pending: !option && partSourceId == null && partOrdinal != null,
@@ -4241,7 +4432,7 @@ function normalizePromptOptimizerSettings(value) {
     const source = value && typeof value === "object" ? value : {};
     const providers = Array.isArray(source.providers) ? source.providers.map((item, index) => {
         const provider = item && typeof item === "object" ? item : {};
-        const apiFormat = ["openai", "gemini", "ollama"].includes(String(provider.api_format || "").toLowerCase())
+        const apiFormat = ["openai", "gemini", "ollama", "local"].includes(String(provider.api_format || "").toLowerCase())
             ? String(provider.api_format).toLowerCase()
             : "openai";
         return {
@@ -4271,6 +4462,15 @@ function normalizePromptOptimizerSettings(value) {
         editable: asBoolean(item?.editable, false),
     })).filter((item) => item.id) : [];
     const activeProvider = String(source.active_provider || providers[0]?.id || "zhipu");
+    const localSource = source.local && typeof source.local === "object" ? source.local : {};
+    const local = {
+        model: String(localSource.model || "").trim(),
+        mmproj: String(localSource.mmproj || "").trim(),
+        device: ["auto", "cpu", "cuda"].includes(String(localSource.device || "")) ? String(localSource.device) : "auto",
+        max_tokens: Number.isFinite(Number(localSource.max_tokens)) ? Math.max(1, Math.min(16384, Number(localSource.max_tokens))) : 4096,
+        context_length: Number.isFinite(Number(localSource.context_length)) ? Math.max(2048, Math.min(131072, Number(localSource.context_length))) : 32768,
+    };
+    const localCatalog = source.local_catalog && typeof source.local_catalog === "object" ? source.local_catalog : {};
     return {
         active_provider: providers.some((item) => item.id === activeProvider) ? activeProvider : providers[0]?.id || "zhipu",
         providers,
@@ -4284,6 +4484,13 @@ function normalizePromptOptimizerSettings(value) {
             : [],
         schemes,
         read_media: asBoolean(source.read_media, false),
+        local,
+        local_catalog: {
+            models: Array.isArray(localCatalog.models) ? localCatalog.models : [],
+            projectors: Array.isArray(localCatalog.projectors) ? localCatalog.projectors : [],
+            missing_transformers: Array.isArray(localCatalog.missing_transformers) ? localCatalog.missing_transformers.map(String) : [],
+            gguf_available: asBoolean(localCatalog.gguf_available, false),
+        },
     };
 }
 
@@ -4295,6 +4502,16 @@ function updatePromptGuideCatalog(settings) {
         zh: String(item.name_zh || item.name || item.id),
         en: String(item.name || item.name_zh || item.id),
     }));
+    // Built-in names stay short; distinguish editable rules with the same name.
+    for (const locale of ["zh", "en"]) {
+        const used = new Set(next.filter((item) => !item.value.startsWith("custom_")).map((item) => item[locale]));
+        for (const item of next.filter((entry) => entry.value.startsWith("custom_"))) {
+            const base = item[locale];
+            if (used.has(item[locale])) item[locale] = `${base}${locale === "zh" ? "（自定义）" : " (Custom)"}`;
+            if (used.has(item[locale])) item[locale] = `${item[locale]} [${item.value}]`;
+            used.add(item[locale]);
+        }
+    }
     PROMPT_GUIDES.splice(0, PROMPT_GUIDES.length, ...next);
 }
 
@@ -4344,6 +4561,7 @@ function promptOptimizerState(node) {
     return {
         ...promptOptimizerSettingsCache,
         ...provider,
+        local: promptOptimizerSettingsCache.local,
         requested_service: requestedService,
         requested_provider: requestedProvider,
         requested_model: requestedModel,
@@ -4421,8 +4639,12 @@ function syncPromptOptimizerButton(node) {
         && asBoolean(getWidgetValue(node, "prompt_optimizer_enabled", false))
         && Boolean(state.requested_provider && state.requested_model);
     const model = state.requested_model;
-    const keyReady = state.api_format === "ollama" || state.api_key_exists || Boolean(String(state.api_key || "").trim());
-    const configured = enabled && Boolean(String(state.api_url || "").trim() && String(model || "").trim() && keyReady);
+    const local = state.api_format === "local";
+    const keyReady = local || state.api_format === "ollama" || state.api_key_exists || Boolean(String(state.api_key || "").trim());
+    const localModelReady = local && promptOptimizerSettingsCache.local_catalog.models.some((item) => String(item?.id || "") === String(model || ""));
+    const configured = enabled && (local
+        ? Boolean(String(model || "").trim() && localModelReady)
+        : Boolean(String(state.api_url || "").trim() && String(model || "").trim() && keyReady));
     const external = promptInputIsConnected(node);
     const pending = Boolean(node.__h3OptimizerPending);
     const locked = external || pending;
@@ -4473,7 +4695,11 @@ function sourceAssetDescriptor(node, mediaType) {
 
 function promptOptimizerResources(node) {
     const counts = { image: 0, video: 0, audio: 0 };
-    return embeddedMediaRecords(node).flatMap((link) => {
+    const mods = refmodReferences(node).map((ref) => {
+        const ordinal = ++counts[ref.type];
+        return { type: ref.type, tag: promptMentionTag(ref.type, ordinal), name: ref.fullLabel };
+    });
+    const media = embeddedMediaRecords(node).flatMap((link) => {
         const type = String(link.media_type || "image").toLowerCase();
         const filename = embeddedMediaFilename(link);
         if (!filename) return [];
@@ -4489,6 +4715,7 @@ function promptOptimizerResources(node) {
             },
         }];
     });
+    return [...mods, ...media];
 }
 
 function setPromptFromOptimizedText(node, value) {
@@ -4524,10 +4751,13 @@ async function optimizePromptFromEditor(node) {
         notifyPromptOptimizer(TEXT.optimizerDisabled, "warn");
         return;
     }
+    if (refmodsInputIsConnected(node)) await refreshRefmodCatalog(true);
     const resources = promptOptimizerResources(node);
     const model = state.requested_model;
-    const keyReady = state.api_format === "ollama" || state.api_key_exists || Boolean(String(state.api_key || "").trim());
-    if (!String(state.api_url || "").trim() || !String(model || "").trim() || !keyReady) {
+    const local = state.api_format === "local";
+    const keyReady = local || state.api_format === "ollama" || state.api_key_exists || Boolean(String(state.api_key || "").trim());
+    const localModelReady = local && promptOptimizerSettingsCache.local_catalog.models.some((item) => String(item?.id || "") === String(model || ""));
+    if (local ? !String(model || "").trim() || !localModelReady : !String(state.api_url || "").trim() || !String(model || "").trim() || !keyReady) {
         notifyPromptOptimizer(TEXT.optimizerMissing);
         return;
     }
@@ -4557,6 +4787,8 @@ async function optimizePromptFromEditor(node) {
                 scene_guide: canonicalPromptGuide(getWidgetValue(node, "prompt_optimizer_scene_guide", "none")),
                 media_counts: mediaCounts,
                 resources,
+                external_reference_map: mentionOptions(node).filter(option => option.refmodKey)
+                    .map(option => `${option.tag} = ${option.fullLabel}`).join("\n"),
             }),
         });
         const data = await response.json().catch(() => ({}));
@@ -5479,7 +5711,13 @@ function productionFallbackValues(node) {
 export function applyProductionShotPreview(node, shot) {
     if (!isTarget(node) || !shot?.media || !shot?.params) return;
     node.properties ||= {};
-    node.properties[EMBEDDED_MEDIA_PROP] = shot.media.map((item) => ({ ...item }));
+    // Show the shot's media where this node keeps its gallery: its own for the
+    // main node, the connected Media node for Setup (as the main node did).
+    const mediaStore = mediaStoreNode(node);
+    if (mediaStore) {
+        mediaStore.properties ||= {};
+        mediaStore.properties[EMBEDDED_MEDIA_PROP] = shot.media.map((item) => ({ ...item }));
+    }
     const params = { ...productionFallbackValues(node), ...shot.params };
     delete params.resolution;
     delete params.width;
@@ -5496,6 +5734,12 @@ export function applyProductionShotPreview(node, shot) {
     setPromptFromOptimizedText(node, shot.prompt);
     syncModeWidgets(node, { adjustHeight: false });
     renderEmbeddedMediaGallery(node);
+    if (mediaStore && mediaStore !== node) {
+        ensureEmbeddedMedia(mediaStore);
+        renderEmbeddedMediaGallery(mediaStore);
+        refreshVueNodeWidgets(mediaStore);
+        mediaStore.setDirtyCanvas?.(true, true);
+    }
     renderEditorFromNode(node, true);
     refreshVueNodeWidgets(node);
     node.setDirtyCanvas?.(true, true);
@@ -5799,7 +6043,24 @@ function repairConfiguredWidgetValues(node, info) {
         prompt_optimizer_scene_guide: canonicalPromptGuide(values[15] ?? defaults.prompt_optimizer_scene_guide),
     };
     for (const name of names) setConfiguredWidgetValue(node, name, normalized[name]);
-    info.widgets_values = names.map((name) => normalized[name]);
+    if (isCoreNode(node)) {
+        // The optional plan socket is not a widget. Continuous controls are
+        // appended only for Setup, preserving the main-node legacy array.
+        const named = info?.widgets_values_named && typeof info.widgets_values_named === "object"
+            ? info.widgets_values_named : {};
+        CONTINUOUS_SETUP_WIDGET_NAMES.forEach((name, index) => {
+            const rawValue = Object.prototype.hasOwnProperty.call(named, name)
+                ? named[name]
+                : values[names.length + index];
+            if (rawValue !== undefined) setConfiguredWidgetValue(node, name, rawValue);
+        });
+        info.widgets_values = [
+            ...names.map((name) => normalized[name]),
+            ...CONTINUOUS_SETUP_WIDGET_NAMES.map((name) => getWidget(node, name)?.value ?? null),
+        ];
+    } else {
+        info.widgets_values = names.map((name) => normalized[name]);
+    }
 }
 
 function embeddedMediaCell(node, mediaType, ordinal) {
@@ -6066,9 +6327,30 @@ function syncEmbeddedMediaResponsiveLayout(node, { resetBaseline = false } = {})
     const workbench = node?.__feihouMediaWorkbench;
     const galleryWidget = node?.__feihouMediaGalleryWidget;
     const promptWrap = node?.__h3EditorWrap;
-    if (!gallery || !workbench || !galleryWidget || !promptWrap) return false;
+    if (isCoreNode(node)) {
+        if (!workbench || !galleryWidget || !promptWrap) return false;
+        const base = EMBEDDED_MEDIA_LAYOUT;
+        const pad = base.workbenchPaddingTop + base.promptBottomGap;
+        const nodeH = Number(node?.size?.[1]);
+        let st = node.__h3EmbeddedResponsiveLayout;
+        if (resetBaseline || !st || st.mode !== "prompt") {
+            st = { mode: "prompt", nodeHeight: Number.isFinite(nodeH) && nodeH > 0 ? nodeH : 0,
+                   hostHeight: Math.max(base.promptBase + pad, Number(galleryWidget.computedHeight) || base.promptBase + pad) };
+            node.__h3EmbeddedResponsiveLayout = st;
+        }
+        // Prompt-only host: CSS lets the editor fill whatever height ComfyUI
+        // gives the widget, so a tab switch can never leave it half-sized.
+        workbench.style.removeProperty("--fh-h3-prompt-height");
+        workbench.style.setProperty("--fh-h3-gallery-height", "0px");
+        node._widgetSlotsDirty = true;
+        return true;
+    }
+    const promptless = isMediaNode(node);
+    if (!gallery || !workbench || !galleryWidget || (!promptWrap && !promptless)) return false;
     const reference = isReferenceMode(node);
-    const layout = EMBEDDED_MEDIA_LAYOUT;
+    const layout = promptless
+        ? { ...EMBEDDED_MEDIA_LAYOUT, promptMin: 0, promptBase: 0, galleryPromptGap: 0 }
+        : EMBEDDED_MEDIA_LAYOUT;
     const imageRows = imageGalleryRows(node);
     const modeKey = reference ? "reference" : "image";
     const minGalleryHeight = embeddedGalleryHeight(reference, layout.imageSlotMin, imageRows);
@@ -6278,8 +6560,8 @@ function renderEmbeddedMediaGallery(node) {
     });
     syncEmbeddedMediaResponsiveLayout(node);
     node._widgetSlotsDirty = true;
-    syncMediaSlotLayout(node);
-}
+    syncMediaSlotLayout(node);    repairNodeLayout(node);
+    if (isMediaNode(node)) notifyMediaConsumers(node);}
 
 function removeEmbeddedMediaGalleryWidgets(node) {
     if (!Array.isArray(node?.widgets)) return;
@@ -6291,12 +6573,49 @@ function removeEmbeddedMediaGalleryWidgets(node) {
     }
 }
 
+function ensureCorePromptHost(node) {
+    if (node.__feihouMediaWorkbench || typeof document === "undefined" || typeof node.addDOMWidget !== "function") return;
+    const workbench = document.createElement("div");
+    workbench.className = "fh-h3-embedded-workbench is-prompt-only";
+    const domWidget = node.addDOMWidget("feihou_h3_prompt_host", "feihou_h3_prompt_host", workbench, {
+        serialize: false,
+        margin: 0,
+        getMinHeight: () => EMBEDDED_MEDIA_LAYOUT.promptMin
+            + EMBEDDED_MEDIA_LAYOUT.workbenchPaddingTop + EMBEDDED_MEDIA_LAYOUT.promptBottomGap,
+        afterResize: () => {
+            if (isVueNodesMode()) return;
+            syncEmbeddedMediaResponsiveLayout(node);
+            applyNativeEditorTheme(node.__h3EditorWrap);
+        },
+    });
+    if (!domWidget) {
+        workbench.remove();
+        return;
+    }
+    domWidget.serialize = false;
+    setWidgetOption(domWidget, "serialize", false);
+    setWidgetOption(domWidget, "canvasOnly", false);
+    node.__feihouMediaWorkbench = workbench;
+    node.__feihouMediaGalleryWidget = domWidget;
+    const domIndex = node.widgets?.indexOf(domWidget) ?? -1;
+    const modeIndex = node.widgets?.indexOf(getWidget(node, "mode")) ?? -1;
+    if (domIndex >= 0 && modeIndex >= 0 && domIndex !== modeIndex + 1) {
+        node.widgets.splice(domIndex, 1);
+        node.widgets.splice(node.widgets.indexOf(getWidget(node, "mode")) + 1, 0, domWidget);
+    }
+    if (Array.isArray(node.size) && node.size[0] < 420) node.setSize?.([420, node.size[1]]);
+}
+
 function ensureEmbeddedMediaGallery(node) {
+    if (isCoreNode(node)) {
+        ensureCorePromptHost(node);
+        return;
+    }
     if (node.__feihouMediaGallery || typeof document === "undefined" || typeof node.addDOMWidget !== "function") return;
     removeEmbeddedMediaGalleryWidgets(node);
     ensureEmbeddedMedia(node);
     const workbench = document.createElement("div");
-    workbench.className = "fh-h3-embedded-workbench";
+    workbench.className = isMediaNode(node) ? "fh-h3-embedded-workbench is-media-only" : "fh-h3-embedded-workbench";
     const gallery = document.createElement("div");
     gallery.className = "fh-h3-media-gallery";
     gallery.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -6313,9 +6632,10 @@ function ensureEmbeddedMediaGallery(node) {
         // One flexible host owns gallery + prompt. Its lower bound is fixed;
         // every extra pixel is then partitioned inside the workbench.
         getMinHeight: () => embeddedGalleryHeight(
-            isReferenceMode(node), EMBEDDED_MEDIA_LAYOUT.imageSlotMin, imageGalleryRows(node),
-        ) + EMBEDDED_MEDIA_LAYOUT.promptMin + EMBEDDED_MEDIA_LAYOUT.galleryPromptGap
-            + EMBEDDED_MEDIA_LAYOUT.workbenchPaddingTop + EMBEDDED_MEDIA_LAYOUT.promptBottomGap,
+    const layout = promptless
+        ? { ...EMBEDDED_MEDIA_LAYOUT, promptMin: 0, promptBase: 0, galleryPromptGap: 0 }
+        : EMBEDDED_MEDIA_LAYOUT;
+    const imageRows = imageGalleryRows(node);            + EMBEDDED_MEDIA_LAYOUT.workbenchPaddingTop + EMBEDDED_MEDIA_LAYOUT.promptBottomGap,
         afterResize: () => {
             // Vue Nodes already runs its own DOM measurement after a resize.
             // Calling our layout twice (including once on the next animation
@@ -6349,7 +6669,8 @@ function ensureEmbeddedMediaGallery(node) {
 function setupMainNodeFrontend(node) {
     if (!node || !isTarget(node)) return;
     node.properties ||= {};
-    ensureEmbeddedMedia(node);
+    void refreshRefmodCatalog();
+    delete node.properties[LINKS_PROP];    ensureEmbeddedMedia(node);
     pruneTransportInputsFromNode(node, { force: true });
     ensureMediaSlotInputs(node);
     installMediaSlotGeometry(node);
@@ -6435,8 +6756,10 @@ function applyFreshNodeDefaults(node) {
 }
 
 function installNode(nodeType, nodeData) {
-    if (nodeData?.name !== NODE_CLASS) return;
-    pruneTransportInputs(nodeData);
+    if (nodeData?.name !== NODE_CLASS && nodeData?.name !== CORE_CLASS) return;
+    // Strip the virtual-wire transport fields from every frontend definition
+    // before a node instance can be constructed. Execution still receives
+    // them through the prompt patch and the Python INPUT_TYPES declaration.    pruneTransportInputs(nodeData);
     if (nodeType?.nodeData && nodeType.nodeData !== nodeData) pruneTransportInputs(nodeType.nodeData);
     if (nodeType?.prototype?.constructor?.nodeData && nodeType.prototype.constructor.nodeData !== nodeData) {
         pruneTransportInputs(nodeType.prototype.constructor.nodeData);
@@ -6519,7 +6842,20 @@ function installNode(nodeType, nodeData) {
             // The DOM widget host can receive its final height one frame after
             // onConfigure. Reconcile once more after that host resize settles.
             globalThis.requestAnimationFrame?.(() => syncEmbeddedMediaResponsiveLayout(this, { resetBaseline: true }));
-        });
+        });        const mediaInputIndex = getMediaInputIndex(this);
+        if (mediaInputIndex >= 0 && this.inputs?.[mediaInputIndex]?.link != null) {
+            scheduleNativeMediaConnectionConversion(this, mediaInputIndex);
+        }
+        if (isCoreNode(this)) {
+            // Links to the Media node may be restored after this node.
+            for (const delay of [0, 120, 500]) {
+                setTimeout(() => {
+                    syncAudioDurationAuto(this);
+                    renderEditorFromNode(this);
+                    requestMentionPreviewRefresh();
+                }, delay);
+            }
+        }
         return result;
     };
 
@@ -6557,6 +6893,16 @@ function installNode(nodeType, nodeData) {
             renderEmbeddedMediaGallery(this);
             requestMentionPreviewRefresh();
         }
+        if ([CORE_MEDIA_INPUT, "refmods"].includes(String(input?.name || ""))) {
+            setTimeout(() => {
+                syncAudioDurationAuto(this);
+                renderEditorFromNode(this);
+                requestMentionPreviewRefresh();
+            }, 0);
+        }
+        if (connected && !this.__h3VirtualWireClearing && /^media(?:_\d+)?$/i.test(String(input?.name || ""))) {
+            scheduleNativeMediaConnectionConversion(this, inputIndex, linkInfo);
+        }
         return result;
     };
 
@@ -6566,15 +6912,16 @@ function installNode(nodeType, nodeData) {
         const result = originalSerialize?.apply(this, arguments);
         if (info && this.properties?.[PROMPT_DOC_PROP]) {
             info.properties ||= {};
-            info.properties[PROMPT_DOC_PROP] = this.properties[PROMPT_DOC_PROP];
+            info.properties[PROMPT_DOC_PROP] = plainCopy(this.properties[PROMPT_DOC_PROP]);
         }
         if (info && this.properties?.[PROMPT_VIEW_PROP]) {
             info.properties ||= {};
-            info.properties[PROMPT_VIEW_PROP] = this.properties[PROMPT_VIEW_PROP];
+            info.properties[PROMPT_VIEW_PROP] = plainCopy(this.properties[PROMPT_VIEW_PROP]);
         }
         if (info) {
             info.properties ||= {};
-            info.properties[EMBEDDED_MEDIA_PROP] = ensureEmbeddedMedia(this);
+            if (isCoreNode(this)) delete info.properties[EMBEDDED_MEDIA_PROP];
+            else info.properties[EMBEDDED_MEDIA_PROP] = plainCopy(ensureEmbeddedMedia(this));
             // Keep all original slots unchanged, regardless of display order
             // or non-serializable gallery/editor DOM widgets.
             const names = [
@@ -6585,6 +6932,7 @@ function installNode(nodeType, nodeData) {
                 "force_offload", "low_vram_streamed_attention",
                 "reference_text_only",
             ];
+            if (isCoreNode(this)) names.push(...CONTINUOUS_SETUP_WIDGET_NAMES);
             info.widgets_values = names.map((name) => getWidget(this, name)?.value ?? null);
             info.widgets_values_named = Object.fromEntries(names.map((name, i) => [name, info.widgets_values[i]]));
             info.properties[LINKS_PROP] = ensureLinks(this).map((link) => ({ ...link }));
@@ -6743,6 +7091,9 @@ function install() {
       .fh-h3-embedded-workbench {
         display: flex; flex-direction: column; gap: 8px; width: auto; height: 100%; min-width: 0; min-height: 0; box-sizing: border-box; margin: 0 10px; padding: ${EMBEDDED_MEDIA_LAYOUT.workbenchPaddingTop}px 0 ${EMBEDDED_MEDIA_LAYOUT.promptBottomGap}px;
       }
+      .fh-h3-embedded-workbench.is-media-only { pointer-events: none; }
+      .fh-h3-embedded-workbench.is-prompt-only .h3-prompt-editor-wrap { height: auto; flex: 1 1 0; min-height: ${EMBEDDED_MEDIA_LAYOUT.promptMin}px; }
+      .fh-h3-embedded-workbench.is-media-only .fh-h3-media-gallery { pointer-events: auto; }
       .fh-h3-media-gallery {
         --fh-h3-image-slot-height: 72px; --fh-h3-video-slot-height: 68px;
         display: grid; grid-auto-rows: max-content; align-content: start; gap: 8px; width: 100%; height: var(--fh-h3-gallery-height, auto); flex: 0 0 var(--fh-h3-gallery-height, auto); min-width: 0; box-sizing: border-box; margin: 0; padding: 0;
@@ -7034,6 +7385,8 @@ function installFaceRefineNode(nodeType, nodeData) {
     const sync = node => {
         const advanced = Boolean(getWidget(node, "advanced")?.value);
         const chunk = getWidget(node, "chunk_frames");
+        const faceMode = getWidget(node, "face_mode");
+        const multi = ["multi", "多人"].includes(String(faceMode?.value || "single").toLowerCase());
         if (chunk && !["不分段", "240", "192", "120", "72"].includes(String(chunk.value))) {
             const n = Number(chunk.value);
             chunk.value = String([72, 120, 192, 240].find(v => v >= n) || "不分段");
@@ -7041,6 +7394,9 @@ function installFaceRefineNode(nodeType, nodeData) {
         for (const name of ["canvas_size", "confidence", "crop_factor", "chunk_frames", "sampler_name", "scheduler", "audio_lock", "clean_second_model", "force_offload"]) {
             setConditionalWidgetVisible(node, getWidget(node, name), advanced, {adjustHeight: false});
         }
+        setConditionalWidgetVisible(node, faceMode, true, {adjustHeight: false});
+        setConditionalWidgetVisible(node, getWidget(node, "target"), !multi, {adjustHeight: false});
+        setConditionalWidgetVisible(node, getWidget(node, "max_faces"), multi, {adjustHeight: false});
         setConditionalWidgetVisible(node, getWidget(node, "prompt"), false, {adjustHeight: false});
         node.setSize?.([node.size[0], node.computeSize()[1]]);
         node.setDirtyCanvas?.(true, true);
@@ -7055,9 +7411,14 @@ function installFaceRefineNode(nodeType, nodeData) {
         const offload = getWidget(this, "force_offload");
         if (offload) this.widgets = [...this.widgets.filter(w => w !== offload), offload];
         const toggle = getWidget(this, "advanced");
+        const faceMode = getWidget(this, "face_mode");
         if (toggle) {
             const cb = toggle.callback;
             toggle.callback = function () { const r = cb?.apply(this, arguments); sync(node); return r; };
+        }
+        if (faceMode) {
+            const cb = faceMode.callback;
+            faceMode.callback = function () { const r = cb?.apply(this, arguments); sync(node); return r; };
         }
         sync(this);
         return result;
@@ -7083,12 +7444,121 @@ function installFaceRefineNode(nodeType, nodeData) {
     };
 }
 
+function installMediaNode(nodeType, nodeData) {
+    if (nodeData?.name !== MEDIA_CLASS) return;
+    if (nodeType.prototype.__feihouStandardH3MediaNodeInstalled) return;
+    nodeType.prototype.__feihouStandardH3MediaNodeInstalled = true;
+    const setup = (node) => {
+        node.properties ||= {};
+        ensureEmbeddedMedia(node);
+        ensureEmbeddedMediaGallery(node);
+        // The gallery is the only widget, so its DOM would cover the node's
+        // bottom corners. A small empty canvas row keeps the resize grips free.
+        if (!getWidget(node, "feihou_h3_media_resize_spacer") && typeof node.addCustomWidget === "function") {
+            node.addCustomWidget({
+                name: "feihou_h3_media_resize_spacer",
+                type: "feihou_h3_spacer",
+                value: null,
+                serialize: false,
+                options: { serialize: false },
+                draw() {},
+                computeSize: () => [0, 16],
+            });
+        }
+        applyNativeEditorTheme(node.__feihouMediaWorkbench);
+        renderEmbeddedMediaGallery(node);
+        syncEmbeddedMediaResponsiveLayout(node, { resetBaseline: true });
+    };
+    const created = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function onNodeCreatedH3Media() {
+        const result = created?.apply(this, arguments);
+        this.title = MEDIA_TITLE;
+        setup(this);
+        return result;
+    };
+    const configured = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function onConfigureH3Media(info) {
+        const result = configured?.apply(this, arguments);
+        if (Array.isArray(info?.properties?.[EMBEDDED_MEDIA_PROP])) {
+            this.properties ||= {};
+            this.properties[EMBEDDED_MEDIA_PROP] = info.properties[EMBEDDED_MEDIA_PROP];
+        }
+        setup(this);
+        return result;
+    };
+    const resized = nodeType.prototype.onResize;
+    nodeType.prototype.onResize = function onResizeH3Media() {
+        const result = resized?.apply(this, arguments);
+        syncEmbeddedMediaResponsiveLayout(this);
+        return result;
+    };
+    const serialized = nodeType.prototype.onSerialize;
+    nodeType.prototype.onSerialize = function onSerializeH3Media(info) {
+        const result = serialized?.apply(this, arguments);
+        if (info) {
+            info.properties ||= {};
+            info.properties[EMBEDDED_MEDIA_PROP] = plainCopy(ensureEmbeddedMedia(this));
+        }
+        return result;
+    };
+    const removed = nodeType.prototype.onRemoved;
+    nodeType.prototype.onRemoved = function onRemovedH3Media() {
+        stopEmbeddedAudioPreview(this);
+        this.__feihouMediaGallery?.remove?.();
+        this.__feihouMediaGallery = null;
+        this.__feihouMediaWorkbench = null;
+        this.__feihouMediaGalleryWidget = null;
+        removeEmbeddedMediaGalleryWidgets(this);
+        const result = removed?.apply(this, arguments);
+        setTimeout(() => notifyMediaConsumers(null), 0);
+        return result;
+    };
+}
+
+function installRefmodMentionRefresh(nodeType, nodeData) {
+    if (!["MiniMaxH3RefModsLoader", "MiniMaxH3RefModsAxis"].includes(nodeData?.name)) return;
+    const created = nodeType.prototype.onNodeCreated;
+    nodeType.prototype.onNodeCreated = function () {
+        const result = created?.apply(this, arguments);
+        for (const widget of this.widgets || []) {
+            const callback = widget.callback;
+            widget.callback = function () {
+                const value = callback?.apply(this, arguments);
+                void refreshRefmodCatalog(true);
+                requestMentionPreviewRefresh();
+                return value;
+            };
+        }
+        void refreshRefmodCatalog(true);
+        return result;
+    };
+    for (const hook of ["onConfigure", "onConnectionsChange", "onRemoved"]) {
+        const previous = nodeType.prototype[hook];
+        nodeType.prototype[hook] = function () {
+            const result = previous?.apply(this, arguments);
+            requestMentionPreviewRefresh();
+            return result;
+        };
+    }
+}
+
 app.registerExtension({
     name: "FeiHouEasyH3",
     setup() {
         install();
     },
+    async refreshComboInNodes() {
+        // ComfyUI's R refresh overwrites localized combo options with backend IDs.
+        // Reload the catalog so rules saved in another page also become selectable.
+        try {
+            await loadPromptOptimizerSettings({ force: true });
+        } catch (error) {
+            console.warn("Easy H3: could not refresh prompt rules; using cached names", error);
+            syncPromptOptimizerNodes();
+        }
+    },
     beforeRegisterNodeDef(nodeType, nodeData) {
+        installRefmodMentionRefresh(nodeType, nodeData);
         installFaceRefineNode(nodeType, nodeData);
         installResolutionNode(nodeType, nodeData);
         localizeNodeDefinition(nodeData);
@@ -7098,5 +7568,6 @@ app.registerExtension({
         installOutputNode(nodeType, nodeData);
         installMediaSourceNode(nodeType, nodeData);
         installNode(nodeType, nodeData);
+        installMediaNode(nodeType, nodeData);
     },
 });

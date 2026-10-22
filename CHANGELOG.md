@@ -1,5 +1,85 @@
 # Changelog
 
+## v1.4.22
+
+- Distinguishes identically named custom rules from built-in rules so selecting RefMod keeps the intended rule binding.
+
+- Adds the saved RefMod filmmaking prompt rule, unchanged, as the read-only built-in `refmod` template (`RefMod`). Main and Setup can select it without creating a custom rule; existing custom rules remain intact.
+- Restores prompt-optimization rule names after ComfyUI's R / Refresh Node Definitions command. Custom rules such as RefMod stay selectable by name in the main node and Setup, preserving the selected rule's ID and reloading rules saved in another page.
+
+## v1.4.21
+
+- Adds optional upstream `H3_REF_MODS` inputs to the main node and Setup, with joint text/vision presentation, direct reference latents, strengths/copies, independent gallery slots and an appended `Output.reference_map` output. RefMods survive high-resolution/trigger-word condition rebuilds in both sampling passes; image mode asks users to switch to reference mode.
+- Adds original RefMod Loader/Axis references to the main node and Setup's `@` menu, with metadata-only discovery, saved source binding, and strengths/copies/component filtering. RefMods lead each modality's numbering; ordinary uploads follow them. Removing ordinary media no longer invalidates RefMod mentions. Replace old placeholder-video mentions via the new menu; genuinely removed references still fail clearly. Both sampling passes and prompt optimization use the same ordering.
+- Saves continuation tails for independent manual segments when production-pack batching is off, including the first segment in Auto mode and hard cuts. Tail saving is independent of applying a previous-segment guide, in both manual and package runs.
+- Preserves zero overlap for independent segments and prefers the saved native tail when a later segment selects the previous video. Existing V7 wiring remains valid.
+- Adds local-model dependency checks and an install/repair button to Standard settings, including native GGUF import, GPU offload and Qwen/MTMD interface checks.
+- Adds a Manager install.py hook and Windows manual-ZIP install scripts that use ComfyUI's Python, choose matching GGUF binary wheels and retain existing Torch/NumPy versions.
+- Checks dependencies before unloading H3 models for local prompt optimization, and reports missing dependencies at startup without automatically installing during node import.
+- Supports the generic MTMD interface used by current official CPU wheels, and respects CPU mode for the vision projector. RH is unchanged.
+
+## v1.4.20
+
+- Brings the Standard GitHub package into parity with the local installation, including the previously local-only `FeiHouEasyH3ContinueOut` continuation/merge node and its registration.
+- Includes the matching Setup continuation guidance, production-pack transition/context controls, continuation-video upload/selection, per-shot state, and frontend persistence.
+- Connect `tail_latent` to FeiHou Toolbox Video Combine V2 to save continuation tails and join the completed segments.
+- Includes the local face-refinement canvas presets from 360P through 1080P and preserves the v1.4.19 local LLM features. RH is unchanged.
+
+## v1.4.19
+
+- Standard local prompt optimization adds embedded bare-safetensors profiles for Qwen3 0.6B, 1.7B, 4B, 14B, 32B, and Mistral 7B Instruct v0.3; existing Qwen3-8B support remains compatible.
+- Bare-safetensors detection now uses exact tensor structure instead of filename guesses, so renamed files remain detectable without confusing unrelated models with the same layer count.
+- DeepSeek-V4 runtime detection now checks whether the installed Transformers package actually contains its model implementation instead of assuming every 5.x package supports it.
+
+## v1.4.18
+
+- Standard local prompt optimization can load a single `.safetensors` file for the built-in Qwen3-8B, DeepSeek-V4 Flash, and DeepSeek-V4 Pro profiles.
+- Detects those profiles from the safetensors tensor header, so renamed files still work; complete Transformers directories and GGUF behavior remain unchanged.
+- Resolves a matching tokenizer from local files or the model's Hugging Face repository. RH is unchanged.
+
+## v1.4.17
+
+- Scans standalone `.safetensors` files under `models/llm`, including files whose names were changed.
+- Shows standalone weights in Standard settings as metadata-only entries when their `config.json` and tokenizer/model directory are missing; they are visible for diagnosis but cannot be selected for generation.
+- Keeps complete Transformers directories runnable and prevents duplicate entries for their weight shards. RH is unchanged.
+
+## v1.4.16
+
+- Adds an optional Standard-edition local LLM/VLM prompt optimizer. It discovers Transformers and GGUF models under `ComfyUI/models/llm`, with optional GGUF `mmproj` selection, device, context, and output-token settings.
+- Keeps local model controls inside the existing prompt-optimizer settings and hides the node's optimizer provider and guide controls until prompt optimization is enabled.
+- Local optimization unloads ComfyUI models around the request and releases temporary caches before H3 sampling continues. The RH edition is unchanged.
+- Adds optional local-model dependencies in `requirements-local-llm.txt`; API prompt optimization remains available without installing them.
+- Identifies GGUF prompt models from their metadata, including Qwen-Image PE weights using the Qwen35 architecture; distinguishes the I2I vision projector from the T2I text model.
+
+## v1.4.14
+
+- Production-pack preview now loads the shot's images, videos and audio into the Media node connected to FeiHou Easy H3 Setup (previously only the standalone main node showed them; Setup and its Media node stayed empty).
+- The pack loader also finds Setup through KJNodes Set/Get pairs, not only direct links and reroutes, so prompts, parameters and media load in such workflows.
+- Front-end only; generation already used the pack media at execution. Validation: JavaScript syntax checks. Not re-tested in a live ComfyUI session.
+
+## v1.4.15
+
+- Removes the standalone Dual Sample 1st/2nd nodes from the node menu. Sample Enhancer 1st/2nd remain available and continue to use their shared internal sampling implementation.
+
+## v1.4.13
+
+- Removes the custom API host and LAN endpoint allow-lists. Custom HTTPS-compatible API URLs can be configured directly without allowed_api_hosts.json.
+- Keeps URL parsing, the external HTTPS requirement, TLS verification, redirect blocking, and local-only settings routes.
+- Validation: Python and JavaScript syntax checks plus static reference checks. GPU generation and live third-party API requests were not performed.
+
+## v1.4.12
+
+- Adds a Standard-edition official-node two-pass H3 enhancement node. It samples a coarse high-noise pass, enlarges the denoised video latent, and continues with a low-noise refinement pass.
+- Adds a `Default Trigger Words` switch to both Sample Enhancer passes. It defaults on and prepends the built-in detail trigger to that pass's encoded prompt without exposing the trigger text in the node UI.
+- LoRA loading is intentionally not integrated; connect externally configured first/refinement models, including any user-selected LoRA chain.
+- Resizes MiniMax H3 reference/keyframe latent metadata with the video latent and preserves the nested audio latent. GPU quality and memory usage were not re-tested.
+
+## v1.4.11
+
+- Production-pack loader accepts shots with no reference images. Such shots run as text-to-video (image mode with no media); shots that reference audio still need at least one image or video, with a clear error.
+- Resolves asset IDs through the Shotlist's inline project data, so a user image declared as `P1` (for example `../人物.jpg`) loads as P1 without being renamed. Files named after the ID (`P3.png`) still take priority; paths outside the package are ignored.
+- Clearer missing/ambiguous asset messages. Folder paths for local ComfyUI are unchanged and need no ZIP. No UI or widget-order changes; RH edition unchanged. Loader validation tested with sample packs; GPU generation not re-tested.
+
 ## v1.4.10
 
 - Removes the face-refinement 24 FPS restriction; uses the frame rate supplied by H3 context for existing timing calculations and output.
