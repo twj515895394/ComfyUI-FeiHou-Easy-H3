@@ -1734,6 +1734,20 @@ def _run_configured_prompt_optimizer(
     if not provider:
         raise ValueError("The selected prompt optimization service is disabled or no longer exists")
 
+    # Keep the optional Ryan ACP integration reachable when its scheme is selected.
+    # Upstream's external RefMod map is appended as context so ACP preserves the
+    # same reference numbering used by the prompt-optimizer workflow.
+    if scene_guide == "ryan_h3_agent" and _RYAN_ACP_AVAILABLE:
+        return _run_ryan_h3_agent(
+            prompt=str(prompt or "") + reference_context,
+            mode=mode,
+            seconds=seconds,
+            resources=resources,
+            provider=provider,
+            reference_short_edge=reference_short_edge,
+            use_dual_skill=bool(config.get("ryan_h3_dual_skill", False)),
+        )
+
     if provider.get("api_format") == "local":
         model = str(provider.get("_requested_model") or "")
         if not str(prompt or "").strip():
