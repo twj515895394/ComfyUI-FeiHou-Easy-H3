@@ -6560,8 +6560,10 @@ function renderEmbeddedMediaGallery(node) {
     });
     syncEmbeddedMediaResponsiveLayout(node);
     node._widgetSlotsDirty = true;
-    syncMediaSlotLayout(node);    repairNodeLayout(node);
-    if (isMediaNode(node)) notifyMediaConsumers(node);}
+    syncMediaSlotLayout(node);
+    repairNodeLayout(node);
+    if (isMediaNode(node)) notifyMediaConsumers(node);
+}
 
 function removeEmbeddedMediaGalleryWidgets(node) {
     if (!Array.isArray(node?.widgets)) return;
@@ -6669,7 +6671,8 @@ function setupMainNodeFrontend(node) {
     if (!node || !isTarget(node)) return;
     node.properties ||= {};
     void refreshRefmodCatalog();
-    delete node.properties[LINKS_PROP];    ensureEmbeddedMedia(node);
+    delete node.properties[LINKS_PROP];
+    ensureEmbeddedMedia(node);
     pruneTransportInputsFromNode(node, { force: true });
     ensureMediaSlotInputs(node);
     installMediaSlotGeometry(node);
@@ -6758,7 +6761,8 @@ function installNode(nodeType, nodeData) {
     if (nodeData?.name !== NODE_CLASS && nodeData?.name !== CORE_CLASS) return;
     // Strip the virtual-wire transport fields from every frontend definition
     // before a node instance can be constructed. Execution still receives
-    // them through the prompt patch and the Python INPUT_TYPES declaration.    pruneTransportInputs(nodeData);
+    // them through the prompt patch and the Python INPUT_TYPES declaration.
+    pruneTransportInputs(nodeData);
     if (nodeType?.nodeData && nodeType.nodeData !== nodeData) pruneTransportInputs(nodeType.nodeData);
     if (nodeType?.prototype?.constructor?.nodeData && nodeType.prototype.constructor.nodeData !== nodeData) {
         pruneTransportInputs(nodeType.prototype.constructor.nodeData);
@@ -6841,7 +6845,8 @@ function installNode(nodeType, nodeData) {
             // The DOM widget host can receive its final height one frame after
             // onConfigure. Reconcile once more after that host resize settles.
             globalThis.requestAnimationFrame?.(() => syncEmbeddedMediaResponsiveLayout(this, { resetBaseline: true }));
-        });        const mediaInputIndex = getMediaInputIndex(this);
+        });
+        const mediaInputIndex = getMediaInputIndex(this);
         if (mediaInputIndex >= 0 && this.inputs?.[mediaInputIndex]?.link != null) {
             scheduleNativeMediaConnectionConversion(this, mediaInputIndex);
         }
