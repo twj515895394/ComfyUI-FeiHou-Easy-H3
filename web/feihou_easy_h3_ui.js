@@ -6632,10 +6632,9 @@ function ensureEmbeddedMediaGallery(node) {
         // One flexible host owns gallery + prompt. Its lower bound is fixed;
         // every extra pixel is then partitioned inside the workbench.
         getMinHeight: () => embeddedGalleryHeight(
-    const layout = promptless
-        ? { ...EMBEDDED_MEDIA_LAYOUT, promptMin: 0, promptBase: 0, galleryPromptGap: 0 }
-        : EMBEDDED_MEDIA_LAYOUT;
-    const imageRows = imageGalleryRows(node);            + EMBEDDED_MEDIA_LAYOUT.workbenchPaddingTop + EMBEDDED_MEDIA_LAYOUT.promptBottomGap,
+            isReferenceMode(node), EMBEDDED_MEDIA_LAYOUT.imageSlotMin, imageGalleryRows(node),
+        ) + (isMediaNode(node) ? 0 : EMBEDDED_MEDIA_LAYOUT.promptMin + EMBEDDED_MEDIA_LAYOUT.galleryPromptGap)
+            + EMBEDDED_MEDIA_LAYOUT.workbenchPaddingTop + EMBEDDED_MEDIA_LAYOUT.promptBottomGap,
         afterResize: () => {
             // Vue Nodes already runs its own DOM measurement after a resize.
             // Calling our layout twice (including once on the next animation
