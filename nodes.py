@@ -523,11 +523,20 @@ def _legacy_prompt_optimizer_config_path() -> str:
     return os.path.join(os.path.dirname(os.path.realpath(__file__)), "prompt_optimizer.json")
 
 
-def _validate_optimizer_base_url(api_url: str, api_format: str = "openai") -> str:
-    """Validate an outbound prompt-API URL before any request is created.
+def _is_loopback_optimizer_host(host: str) -> bool:
+    """True for this-machine destinations; never for DNS aliases of other hosts."""
+    if host in {"localhost", "localhost.localdomain"}:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
-    Custom API hosts are accepted directly. External APIs still require HTTPS;
-    local Ollama keeps its normal localhost-only HTTP handling.
+
+def _validate_optimizer_base_url(api_url: str, api_format: str = "openai") -> str:
+    """Validate URL syntax and require HTTPS for remote prompt APIs.
+
+    Local loopback APIs may use HTTP for model-list discovery and inference.
     """
     base = str(api_url or "").strip().rstrip("/")
     if not base:
@@ -544,10 +553,12 @@ def _validate_optimizer_base_url(api_url: str, api_format: str = "openai") -> st
         raise ValueError("Prompt optimization API URL is invalid")
 
     normalized_format = str(api_format or "openai").strip().lower()
-    if normalized_format == "ollama":
-        if scheme not in {"http", "https"} or host not in {"localhost", "127.0.0.1", "::1"}:
-            raise ValueError("Ollama requires localhost, 127.0.0.1, or ::1")
+    if _is_loopback_optimizer_host(host):
+        if scheme not in {"http", "https"}:
+            raise ValueError("Prompt optimization API URL is invalid")
         return base
+    if normalized_format == "ollama":
+        raise ValueError("Ollama requires localhost, 127.0.0.1, or ::1")
 
     if scheme != "https":
         raise ValueError("External prompt optimization APIs must use HTTPS")
