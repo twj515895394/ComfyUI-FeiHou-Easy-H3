@@ -540,13 +540,17 @@ class FeiHouEasyH3ChainSampler:
             if clip_trans_step is None:
                 clip_trans_step = transition_step
 
-            # Step 2: Resolve total steps and dynamic sigmas from Node 2 MultiClip
-            clip_desired_steps = getattr(clip, "steps", None)
+            # Step 2: Resolve total steps and dynamic sigmas
+            # Rule: Incoming connected `sigmas` is the authoritative source of truth.
+            # Only if this specific clip explicitly checked override_steps=True will it dynamically
+            # recalculate its own sigmas schedule.
+            clip_has_override = getattr(clip, "override_steps", False)
+            clip_desired_steps = getattr(clip, "steps", None) if clip_has_override else None
             current_sigmas_steps = (len(sigmas) - 1) if (sigmas is not None and hasattr(sigmas, "__len__")) else None
 
-            if clip_desired_steps is not None and clip_desired_steps > 0 and (current_sigmas_steps != clip_desired_steps) and hasattr(model, "get_model_object"):
+            if clip_has_override and clip_desired_steps is not None and clip_desired_steps > 0 and (current_sigmas_steps != clip_desired_steps) and hasattr(model, "get_model_object"):
                 _LOG.info(
-                    "Clip %d (%s): step count from Node 2 (%d steps) takes precedence over incoming sigmas (%s steps). Recalculating H3 sigmas...",
+                    "Clip %d (%s): 启用了分镜独立步数 (%d 步)，覆盖连线输入的 sigmas (%s 步)，正在动态重新计算 H3 调度...",
                     clip.index,
                     clip.name,
                     clip_desired_steps,
