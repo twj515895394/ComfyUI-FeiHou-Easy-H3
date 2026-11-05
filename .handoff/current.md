@@ -1,24 +1,35 @@
 # 当前交接索引 (Current Handoff)
 
 - **最新快照**：[handoff-20261105-214000-bunny-bridge-and-ui-layout.md](./handoff-20261105-214000-bunny-bridge-and-ui-layout.md)
-- **更新时间**：2026-11-05 21:40:00
+- **更新时间**：2026-11-05 23:25:00
 - **当前状态**：
-  1. **BUNNY H3 Conditioning Bridge（语义桥）双模协同接入**：
+  1. **连线 sigmas 绝对权威性与 SelfLift 二采步数对齐**：
+     - 修复 `chain_sampler.py` 中误用节点 2 默认步数（8 步）强行覆盖外部连线传入的自定义 sigmas（如 10 步）的问题；
+     - 确立清晰权威原则：连入 Node 5 `sigmas` 端口的时间步调度具备最高优先级，仅在分镜显式勾选 `override_steps=True` 时才触发动态重算；
+     - SelfLift 架构在 10 步 sigmas 下精准分配：一采（低模）6 步，二采（高模）$10 - 6 = 4$ 步。
+  2. **BUNNY H3 Conditioning Bridge（语义桥）双模协同接入**：
      - `multi_clip_node.py` 末尾挂载 `positive` (CONDITIONING) 输出端口；
      - `chain_sampler.py` 末尾挂载 `positive` (CONDITIONING) 输入端口，内置 `bunny_h3_bridge` 元数据探测器与多分镜自动广播机制；
      - 单分镜模式直通语义桥，多分镜模式各分镜独立提示词与素材引用 100% 保全的同时自动应用同款语义桥转换。
-  2. **正负向 Condition 链路闭环**：
+  3. **正负向 Condition 链路闭环**：
      - 用户可在画布上直接连接 `Node 2 (positive)` -> `ZeroOutConditioning` -> `Node 5 (negative)`，或依赖 Node 5 底层内置的自动条件零化兜底。
-  3. **节点 2 UI 自适应与提示词视野扩容**：
+  4. **节点 2 UI 自适应与提示词视野扩容**：
      - 彻底消除底部 400px 大片灰色留白：容器自适应高度与 `node.size[1]` 联动，并在 `onConfigure` 与 `onResize` 实时同步；
      - 提示词文本框高度从 110px 提升至 150px，行数扩展至 6 行；
      - 强化消除原生 `global_prompt` 幽灵输入框，标签栏上方干净平整。
-  4. **测试验证**：59 项单元测试 100% 全部通过。
+  5. **测试验证**：60 项单元测试 100% 全部通过。
 - **下阶段核心待办**：用户在秋叶启动器中重启 ComfyUI，体验扩容后的 UI 界面，并在画布上连接 BUNNY H3 语义桥或零化条件进行长视频生成质检。
 
 ---
 
 ## 核心进展归档（倒序）
+
+### 迭代 7（2026-11-05 23:25:00）：sigmas 连线权威性修复与 SelfLift 步数精准分配
+1. **根因定位与修复**：
+   - 原逻辑无条件比对 `clip.steps`（节点 2 默认 8 步）与连线 `sigmas` 步数（10 步），由于 $8 \neq 10$，误判为“分镜步数与输入不符”，进而调用 `calculate_sigmas` 重新生成了 8 步 simple 调度，导致二采被锁死在 $8 - 6 = 2$ 步；
+   - 现增加 `clip_has_override = getattr(clip, "override_steps", False)` 守卫，只有分镜显式勾选覆盖步数时才重算，默认连线 `sigmas` 100% 直通。
+2. **测试验证**：
+   - 新增 `test_incoming_sigmas_authority` 单元测试，全套 60 项单测 100% 通过。
 
 ### 迭代 6（2026-11-05 21:40:00）：BUNNY H3 语义桥协同广播、Condition 端口暴露与 UI 留白高度优化
 1. **Condition 端口向后兼容暴露**：
