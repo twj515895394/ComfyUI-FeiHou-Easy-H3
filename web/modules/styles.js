@@ -22,7 +22,7 @@ export function installStyles() {
         user-select: none;
         overflow-y: auto !important;
         overflow-x: hidden !important;
-        max-height: 520px;
+        max-height: 720px;
         scrollbar-width: thin;
       }
       .fh-mc-container::-webkit-scrollbar {
@@ -243,8 +243,8 @@ export function installStyles() {
       }
       .fh-mc-prompt-input {
         width: 100%;
-        min-height: 110px;
-        height: 110px;
+        min-height: 140px;
+        height: 150px;
         background: #0f1015;
         border: 1px solid rgba(255, 255, 255, 0.15);
         border-radius: 6px;

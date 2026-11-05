@@ -155,6 +155,12 @@ workflow = {
                     "type": "INT",
                     "links": [15],
                     "label": "steps"
+                },
+                {
+                    "name": "positive",
+                    "type": "CONDITIONING",
+                    "links": None,
+                    "label": "positive"
                 }
             ],
             "title": "2. 多分镜素材配置",
@@ -248,7 +254,8 @@ workflow = {
                 {"name": "sigmas", "type": "SIGMAS", "link": 9},
                 {"name": "second_sampling_model", "type": "MODEL", "link": 4},
                 {"name": "audio_vae", "type": "VAE", "link": 7},
-                {"name": "negative", "type": "CONDITIONING", "link": None}
+                {"name": "negative", "type": "CONDITIONING", "link": None},
+                {"name": "positive", "type": "CONDITIONING", "link": None}
             ],
             "outputs": [
                 {
@@ -290,7 +297,9 @@ workflow = {
                 "auto",                                  # tiling_axis
                 "global_stream",                         # highres_tiling_mode
                 4096,                                    # highres_token_chunk
-                4.0                                      # highres_weight_cache_gb
+                4.0,                                     # highres_weight_cache_gb
+                "22",                                    # overlap_frames ("22" 或 "39")
+                False                                    # unload_between_segments (段间全卸载保底开关)
             ]
         },
         {
@@ -438,7 +447,10 @@ print(f"Self-consistency check PASSED: {len(links_by_id)} links valid.")
 # 2. Output paths
 out_paths = [
     "workflows/feihou_h3_multiclip_7nodes.json",
+    "workflows/01_h3_multi_clip_long_video_pipeline.json",
     "X:/ComfyUI-aki-v2/ComfyUI/user/default/workflows/FeiHou_H3_MultiClip_LongVideo_7Nodes.json",
+    "X:/ComfyUI-aki-v2/ComfyUI/user/default/workflows/01_FeiHou_H3多分镜长视频_7节点工作流.json",
+    "X:/ComfyUI-aki-v2/ComfyUI/user/default/workflows/01_h3_multi_clip_long_video_pipeline.json",
 ]
 
 for p in out_paths:
@@ -512,6 +524,8 @@ api_workflow = {
             "sampling_engine": "selflift_avatar",
             "seed_behavior": "increment",
             "continuation_mode": "hybrid",
+            "overlap_frames": "22",
+            "unload_between_segments": False,
             "context_noise": 0.0,
             "shift_video": 12.0,
             "shift_audio": 3.0,

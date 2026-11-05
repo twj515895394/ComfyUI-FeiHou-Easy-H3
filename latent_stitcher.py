@@ -20,10 +20,23 @@ LOGGER = logging.getLogger("feihou_latent_stitcher")
 
 # In H3 tokenization: 1 + 4 + 4 + 4 + 4 + 1 + 4 = 22 frames = 7 latent steps.
 H3_VIDEO_TRIM_STEPS = 7
+H3_VIDEO_TRIM_STEPS_22 = 7
+H3_VIDEO_TRIM_STEPS_39 = 12
 
 # In H3 audio tokenization: 40 Hz audio against 24 fps video.
 # 18 frames * (5 / 3) = 30 audio steps.
+# 39 frames * (5 / 3) = 65 audio steps.
 H3_AUDIO_TRIM_STEPS = 30
+H3_AUDIO_TRIM_STEPS_22 = 30
+H3_AUDIO_TRIM_STEPS_39 = 65
+
+
+def get_h3_trim_steps(overlap_frames: int | str = 22) -> tuple[int, int]:
+    """Return (video_trim_steps, audio_trim_steps) for a given overlap frame count."""
+    frames = int(overlap_frames)
+    if frames == 39:
+        return H3_VIDEO_TRIM_STEPS_39, H3_AUDIO_TRIM_STEPS_39
+    return H3_VIDEO_TRIM_STEPS_22, H3_AUDIO_TRIM_STEPS_22
 
 
 def unpack_h3_latent(latent: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:

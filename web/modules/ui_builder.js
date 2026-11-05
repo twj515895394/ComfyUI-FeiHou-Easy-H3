@@ -223,7 +223,7 @@ export function buildUI(node, container) {
 
         const promptInput = document.createElement("textarea");
         promptInput.className = "fh-mc-prompt-input";
-        promptInput.rows = 5;
+        promptInput.rows = 6;
         if (!enableGlobal) {
             promptInput.disabled = true;
             promptInput.placeholder = "全局共享已关闭（分镜将不继承此全局提示词）";
@@ -358,7 +358,7 @@ export function buildUI(node, container) {
 
         const promptInput = document.createElement("textarea");
         promptInput.className = "fh-mc-prompt-input";
-        promptInput.rows = 5;
+        promptInput.rows = 6;
         promptInput.placeholder = isText
             ? `输入${curClip.name}的分镜提示词...`
             : isImage

@@ -146,6 +146,12 @@
             15
           ],
           "label": "steps"
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "links": null,
+          "label": "positive"
         }
       ],
       "title": "2. 多分镜素材配置",
@@ -304,6 +310,11 @@
           "name": "negative",
           "type": "CONDITIONING",
           "link": null
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": null
         }
       ],
       "outputs": [
@@ -348,7 +359,9 @@
         "auto",
         "global_stream",
         4096,
-        4.0
+        4.0,
+        "22",
+        false
       ]
     },
     {

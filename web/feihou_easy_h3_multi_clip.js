@@ -72,7 +72,7 @@ app.registerExtension({
                 serialize: false,
                 getMinHeight: () => {
                     const m = getGenerationMode(this);
-                    return m === "text" ? 340 : m === "image" ? 480 : 580;
+                    return m === "text" ? 380 : m === "image" ? 520 : 640;
                 },
             });
 
@@ -95,8 +95,8 @@ app.registerExtension({
 
             if (Array.isArray(this.size)) {
                 const genMode = getGenerationMode(this);
-                const targetH = genMode === "text" ? 640 : genMode === "image" ? 800 : 960;
-                this.setSize?.([Math.max(680, this.size[0]), Math.max(targetH, this.size[1])]);
+                const targetH = genMode === "text" ? 640 : genMode === "image" ? 820 : 1000;
+                this.setSize?.([Math.max(700, this.size[0]), Math.max(targetH, this.size[1])]);
                 updateContainerHeight(this, container);
             }
             return result;

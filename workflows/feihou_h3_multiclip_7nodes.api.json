@@ -102,6 +102,8 @@
       "sampling_engine": "selflift_avatar",
       "seed_behavior": "increment",
       "continuation_mode": "hybrid",
+      "overlap_frames": "22",
+      "unload_between_segments": false,
       "context_noise": 0.0,
       "shift_video": 12.0,
       "shift_audio": 3.0,

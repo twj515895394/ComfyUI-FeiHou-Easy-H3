@@ -112,8 +112,8 @@ class FeiHouEasyH3MultiClip:
 
     CATEGORY = "FeiHou Easy H3"
     FUNCTION = "generate"
-    RETURN_TYPES = ("MODEL", "MODEL", "FEIHOU_MULTI_CLIP_CONTEXT", "VAE", "VAE", "STRING", "INT")
-    RETURN_NAMES = ("model", "second_sampling_model", "multi_clip_context", "vae", "audio_vae", "prompt_preview", "steps")
+    RETURN_TYPES = ("MODEL", "MODEL", "FEIHOU_MULTI_CLIP_CONTEXT", "VAE", "VAE", "STRING", "INT", "CONDITIONING")
+    RETURN_NAMES = ("model", "second_sampling_model", "multi_clip_context", "vae", "audio_vae", "prompt_preview", "steps", "positive")
     DESCRIPTION = "Multi-clip long video container with global/clip tabbed asset gallery, automatic quota chaining, and cascaded prompts."
 
     @classmethod
@@ -497,4 +497,5 @@ class FeiHouEasyH3MultiClip:
                 f" | 引用: {c.reference_map}" if c.reference_map else ""
             )
         _LOG.info("=" * 60)
-        return (model, second_model or model, context, h3_bundle.video_vae, h3_bundle.audio_vae, context.prompt_preview, int(steps))
+        positive_cond = clip_specs[0].base_conditioning if clip_specs else None
+        return (model, second_model or model, context, h3_bundle.video_vae, h3_bundle.audio_vae, context.prompt_preview, int(steps), positive_cond)

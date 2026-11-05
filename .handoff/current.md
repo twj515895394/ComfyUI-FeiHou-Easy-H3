@@ -1,18 +1,49 @@
 # 当前交接索引 (Current Handoff)
 
-- **最新快照**：[handoff-20261105-180000-refmod-mention-support.md](./handoff-20261105-180000-refmod-mention-support.md)
-- **更新时间**：2026-11-05 19:15:00
+- **最新快照**：[handoff-20261105-214000-bunny-bridge-and-ui-layout.md](./handoff-20261105-214000-bunny-bridge-and-ui-layout.md)
+- **更新时间**：2026-11-05 21:40:00
 - **当前状态**：
-  1. 彻底解决 Stage 2/3 分镜 2 采样时第三方 `PainterNodes` 的 `KeyError: 'latent'` 崩溃问题（严格仅修改本插件，不碰 ComfyUI 官方核心与外部插件）。
-  2. 修复 `chain_sampler.py` 中重复读取 `initial_latent` 覆盖潜空间续接 `_carry_latent` 的缺陷，确保 7 tokens 潜变量与 `noise_mask` 真实生效。
-  3. 分镜素材画廊组件全面支持**操作系统文件拖拽上传**（单文件/多文件顺延填充）、**槽位间拖拽调换排序**与高亮交互反馈。
-  4. 7 节点长视频工作流已规范部署至 `user/default/workflows/01_FeiHou_H3多分镜长视频_7节点工作流.json`。
-  5. 52 项单元测试全部通过。
-- **下阶段核心待办**：用户在秋叶启动器中重启 ComfyUI，在 Web 界面加载 7 节点工作流重新执行全链路生成。
+  1. **BUNNY H3 Conditioning Bridge（语义桥）双模协同接入**：
+     - `multi_clip_node.py` 末尾挂载 `positive` (CONDITIONING) 输出端口；
+     - `chain_sampler.py` 末尾挂载 `positive` (CONDITIONING) 输入端口，内置 `bunny_h3_bridge` 元数据探测器与多分镜自动广播机制；
+     - 单分镜模式直通语义桥，多分镜模式各分镜独立提示词与素材引用 100% 保全的同时自动应用同款语义桥转换。
+  2. **正负向 Condition 链路闭环**：
+     - 用户可在画布上直接连接 `Node 2 (positive)` -> `ZeroOutConditioning` -> `Node 5 (negative)`，或依赖 Node 5 底层内置的自动条件零化兜底。
+  3. **节点 2 UI 自适应与提示词视野扩容**：
+     - 彻底消除底部 400px 大片灰色留白：容器自适应高度与 `node.size[1]` 联动，并在 `onConfigure` 与 `onResize` 实时同步；
+     - 提示词文本框高度从 110px 提升至 150px，行数扩展至 6 行；
+     - 强化消除原生 `global_prompt` 幽灵输入框，标签栏上方干净平整。
+  4. **测试验证**：59 项单元测试 100% 全部通过。
+- **下阶段核心待办**：用户在秋叶启动器中重启 ComfyUI，体验扩容后的 UI 界面，并在画布上连接 BUNNY H3 语义桥或零化条件进行长视频生成质检。
 
 ---
 
 ## 核心进展归档（倒序）
+
+### 迭代 6（2026-11-05 21:40:00）：BUNNY H3 语义桥协同广播、Condition 端口暴露与 UI 留白高度优化
+1. **Condition 端口向后兼容暴露**：
+   - 在 `multi_clip_node.py` 的 `RETURN_TYPES` 末尾追加 `positive`（第 8 个端口，Slot 7），输出当前激活/第 1 分镜的完整 Conditioning；
+   - 在 `chain_sampler.py` 的 `INPUT_TYPES["optional"]` 末尾追加 `positive` 输入端口（Slot 8），确保已有工作流（如 `长视频test.json`）端口连线零漂移。
+2. **BUNNY H3 语义桥元数据探测与多镜头动态广播**：
+   - 探测传入 `positive` 中的 `bunny_h3_bridge` 元数据标记；
+   - 分镜 1 直通增强结果，分镜 2..N 自动对各自独立的 `clip.base_conditioning` 应用同款语义桥转换（提取 adapter、alpha、magnitude_match 配置）；
+   - 兼顾画布直观连线调节与多分镜各自独立提示词与素材引用的完美保全。
+3. **节点 2 前端高度自适应与提示词扩容**：
+   - `.fh-mc-container` 默认 `max-height` 提升至 720px，并在 `onConfigure` 与 `onResize` 动态计算 `node.size[1] - 225px`，消除底部留白；
+   - `.fh-mc-prompt-input` 最小高度提升至 140px，默认高度 150px，行数设为 6 行；
+   - 彻底隐藏原生 `global_prompt` textarea，避免露头残存。
+4. **59 项单测全部通过**。
+
+### 迭代 5（2026-11-05 20:45:00）：22/39 帧重叠衔接动态切换与段间全卸载保底开关
+1. **22/39 帧重叠衔接全链路动态化**：
+   - 采样端在 `chain_sampler.py` 增加 `overlap_frames` 控件（`["22", "39"]`，默认 `"22"`），动态计算 7/12 潜步与 36/65 音步；
+   - 解码端在 `vae_decoder.py` 动态读取 `samples["feihou_multiclip_meta"]["carry_frames"]`，视频像素与音频波形（32kHz 下 29,333 vs 52,000 采样点）精准裁切。
+2. **段间全卸载保底开关与智能显存留存**：
+   - 增加 `unload_between_segments` 控件（默认 `False`）；
+   - 默认模式下分镜间保留 DiT 权重于显存中，避免每个分镜重复耗费数十秒从内存加载 38.4GB 模型；
+   - 保底模式开启时每段采样后彻底卸载所有模型清空显存，牺牲速度保证超长片段跑通不爆显存；
+   - 全部分镜采样完毕后统一卸载 DiT 模型，为 2.0MP 3D VAE 解码让渡 18GB+ 完整显存。
+3. **57 项单元测试全部通过**。
 
 ### 迭代 4（2026-11-05 19:15:00）：第三方 PainterNodes 猴子补丁冲突规避与潜变量续接修复
 1. **KeyError: 'latent' 根因定位与本插件单边兼容治理**：

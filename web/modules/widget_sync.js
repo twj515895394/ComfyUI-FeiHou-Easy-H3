@@ -14,6 +14,9 @@ export function hideNativeGlobalPrompt(node) {
         w.inputEl.style.visibility = "hidden";
         w.inputEl.style.opacity = "0";
         w.inputEl.style.pointerEvents = "none";
+        w.inputEl.style.height = "0px";
+        w.inputEl.style.position = "absolute";
+        w.inputEl.style.top = "-9999px";
     }
 }
 
@@ -105,11 +108,14 @@ export function syncResolutionWidgets(node) {
 }
 
 export function updateContainerHeight(node, container) {
-    if (!node || !container || !Array.isArray(node.size)) return;
+    if (!node) return;
+    const cont = container || node.__fhMcContainer;
+    if (!cont || !Array.isArray(node.size)) return;
     const genMode = getGenerationMode(node);
-    const minHeight = genMode === "text" ? 340 : genMode === "image" ? 480 : 580;
-    const avail = Math.max(minHeight, node.size[1] - 250);
-    container.style.maxHeight = `${avail}px`;
+    const minHeight = genMode === "text" ? 380 : genMode === "image" ? 520 : 640;
+    // Top widgets occupy ~220px. Ensure container fills smoothly down to lower edge of node.
+    const avail = Math.max(minHeight, Math.floor(node.size[1] - 225));
+    cont.style.maxHeight = `${avail}px`;
 }
 
 const DEFAULT_CHAIN_SAMPLER_VALUES = {

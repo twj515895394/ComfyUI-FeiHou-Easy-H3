@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import logging
 import random
+import time
 from typing import Any, Sequence
 
 import torch
@@ -38,10 +39,15 @@ _LOG = logging.getLogger("feihou_chain_sampler")
 
 # Continuation constants matching ComfyUI-MiniMaxH3-lanxi:
 # In H3's 5n+2 latent / 17n+5 pixel grid:
-# 7 latent steps correspond to 1 + 4*4 + 1 + 4 = 22 pixel frames.
+# - For 22 frames: 7 latent steps (1 + 4*4 + 1 + 4 = 22 frames), 36 audio steps, 18 frames audio context.
+# - For 39 frames: 12 latent steps (22 + 17 = 39 frames), 65 audio steps, 39 frames audio context.
 CARRY_TOKENS = 7
 CARRY_FRAMES = 22
 CARRY_AUDIO_STEPS = 36
+
+CARRY_TOKENS_39 = 12
+CARRY_FRAMES_39 = 39
+CARRY_AUDIO_STEPS_39 = 65
 
 
 def shift_sigma(base_sigma: torch.Tensor, shift: float) -> torch.Tensor:
@@ -131,19 +137,22 @@ def _safe_unpack_av(latent_dict: dict[str, Any]) -> tuple[torch.Tensor, torch.Te
 def _carry_latent(
     prev_latent: dict[str, Any],
     cur_latent: dict[str, Any],
+    carry_tokens: int = CARRY_TOKENS,
+    carry_audio_steps: int = CARRY_AUDIO_STEPS,
     context_noise: float = 0.0,
 ) -> dict[str, Any]:
     """Carry over previous segment's tail latent into the start of the current segment.
 
     Adopts ComfyUI-MiniMaxH3-lanxi design:
-    - 7 latent video tokens and 36 audio steps are copied to the head of the current latent.
+    - carry_tokens (7 or 12) video tokens and carry_audio_steps (36 or 65) audio steps
+      are copied to the head of the current latent.
     - A single-channel [B, 1, T, H, W] and [B, 1, 2, T] noise_mask is attached with context_noise
       (default 0.0) on the carried region, preserving it exactly during sampling.
     """
     prev_v, prev_a = _safe_unpack_av(prev_latent)
     cur_v, cur_a = _safe_unpack_av(cur_latent)
 
-    tokens = min(CARRY_TOKENS, int(prev_v.shape[2]), int(cur_v.shape[2]))
+    tokens = min(int(carry_tokens), int(prev_v.shape[2]), int(cur_v.shape[2]))
     if tokens <= 0:
         return cur_latent
 
@@ -153,7 +162,7 @@ def _carry_latent(
     audio = None
     audio_steps = 0
     if prev_a is not None and cur_a is not None:
-        audio_steps = min(CARRY_AUDIO_STEPS, int(prev_a.shape[-1]), int(cur_a.shape[-1]))
+        audio_steps = min(int(carry_audio_steps), int(prev_a.shape[-1]), int(cur_a.shape[-1]))
         audio = cur_a.clone()
         if audio_steps > 0:
             audio[..., :audio_steps] = prev_a[..., -audio_steps:].to(audio)
@@ -231,6 +240,60 @@ def _zero_out_conditioning(conditioning: list[list[Any]]) -> list[list[Any]]:
         zero_emb = torch.zeros_like(emb) if isinstance(emb, torch.Tensor) else emb
         out.append([zero_emb, d])
     return out
+
+
+def _extract_bunny_bridge_params(conditioning: Any) -> dict[str, Any] | None:
+    """Extract BUNNY H3 Conditioning Bridge metadata if present on conditioning."""
+    if not conditioning or not isinstance(conditioning, list):
+        return None
+    for item in conditioning:
+        if isinstance(item, (list, tuple)) and len(item) >= 2 and isinstance(item[1], dict):
+            meta = item[1]
+            if meta.get("bunny_h3_bridge"):
+                return {
+                    "adapter": meta.get("bunny_h3_bridge_adapter"),
+                    "alpha": meta.get("bunny_h3_bridge_alpha", 0.1),
+                    "magnitude_match": meta.get("bunny_h3_bridge_mode", "per_token"),
+                }
+    return None
+
+
+def _apply_bunny_bridge_to_conditioning(conditioning: Any, bridge_params: dict[str, Any]) -> Any:
+    """Safely apply BUNNY H3 bridge MLP to a conditioning object using extracted parameters."""
+    if not bridge_params or not conditioning:
+        return conditioning
+    try:
+        bridge_dirs = [
+            "X:/ComfyUI-aki-v2/ComfyUI/custom_nodes/BUNNY_H3_Conditioning_Bridge",
+        ]
+        if folder_paths and hasattr(folder_paths, "base_path"):
+            bridge_dirs.append(os.path.join(folder_paths.base_path, "custom_nodes", "BUNNY_H3_Conditioning_Bridge"))
+
+        target_file = None
+        for b_dir in bridge_dirs:
+            if b_dir:
+                cand = os.path.join(b_dir, "nodes.py")
+                if os.path.isfile(cand):
+                    target_file = cand
+                    break
+
+        if target_file is not None:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("bunny_bridge_runtime", target_file)
+            if spec and spec.loader:
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                if hasattr(mod, "_apply_bridge"):
+                    return mod._apply_bridge(
+                        conditioning,
+                        adapter_name=bridge_params.get("adapter"),
+                        alpha=bridge_params.get("alpha", 0.1),
+                        magnitude_match=bridge_params.get("magnitude_match", "per_token"),
+                        enabled=True,
+                    )
+    except Exception as exc:
+        _LOG.warning("Could not apply BUNNY H3 bridge to conditioning: %s", exc)
+    return conditioning
 
 
 def _ensure_sol_attn(model):
@@ -328,6 +391,7 @@ class FeiHouEasyH3ChainSampler:
                 "second_sampling_model": ("MODEL", {"tooltip": "SelfLift 二采高分辨率模型；如未连接则自动复用一采 model"}),
                 "audio_vae": ("VAE", {"tooltip": "H3 音频 VAE 编解码器（与 Video VAE 独立分离）"}),
                 "negative": ("CONDITIONING", {"tooltip": "负向提示词条件（可选；未连线时自动置零生成空负向）"}),
+                "positive": ("CONDITIONING", {"tooltip": "正向提示词条件（可选；接入 BUNNY H3 语义桥或自定义 Conditioning）"}),
                 # SelfLift parameters (transition_step 已由上游 Node 2 MultiClip 上下文全局及分镜统一传递，不再作为前端重复控件显示)
                 "lowres_scale": ("FLOAT", {"default": 0.5, "min": 0.25, "max": 1.0, "step": 0.05, "tooltip": "SelfLift 一采低分辨率缩放比例（默认 0.5），先在 1/2 尺寸上极速构建骨架与大动态"}),
                 "rho": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "SelfLift 噪声调度平滑参数（默认 0.0）"}),
@@ -341,6 +405,8 @@ class FeiHouEasyH3ChainSampler:
                 "highres_tiling_mode": (["spatial", "global_stream"], {"default": "global_stream", "tooltip": "分块流式传输模式：global_stream（推荐，搭配稀疏注意力大幅压降显存）；spatial（纯空间物理分块）"}),
                 "highres_token_chunk": ("INT", {"default": 4096, "min": 256, "max": 65536, "tooltip": "分块单次 Attention 计算的最大 Token 块大小（默认 4096，数值越小显存越低）"}),
                 "highres_weight_cache_gb": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 64.0, "step": 0.5, "tooltip": "超分辨率阶段保留在 GPU 的模型权重显存缓存配额（GB，默认 4.0）"}),
+                "overlap_frames": (["22", "39"], {"default": "22", "tooltip": "分镜衔接重叠帧数：22 帧（约 0.92 秒，7 个潜变量步长，速度更快）；39 帧（约 1.63 秒，12 个潜变量步长，65 步整音频，动作与声音衔接更平滑自然）"}),
+                "unload_between_segments": ("BOOLEAN", {"default": False, "tooltip": "【段间全卸载保底开关】：默认关闭（不卸载模型，模型常驻显存/内存，下个片段零等待全速连续采样）；若开启，每段采样结束后强制全卸载所有模型并清空显存，适合超长片段、极高分辨率或显存极度紧绷的极端保底场景（牺牲速度确保能跑不爆显存）"}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -366,6 +432,7 @@ class FeiHouEasyH3ChainSampler:
         second_sampling_model=None,
         audio_vae=None,
         negative=None,
+        positive=None,
         transition_step: int = 6,
         lowres_scale: float = 0.5,
         rho: float = 0.0,
@@ -379,6 +446,8 @@ class FeiHouEasyH3ChainSampler:
         highres_tiling_mode: str = "global_stream",
         highres_token_chunk: int = 4096,
         highres_weight_cache_gb: float = 4.0,
+        overlap_frames: str = "22",
+        unload_between_segments: bool = False,
         unique_id=None,
     ):
         if not isinstance(multi_clip_context, MultiClipContext):
@@ -387,6 +456,23 @@ class FeiHouEasyH3ChainSampler:
         clips = multi_clip_context.clips
         if not clips:
             raise ValueError("MultiClipContext contains 0 clips to sample.")
+
+        # Resolve dynamic overlap parameters (22 frames vs 39 frames)
+        overlap_n = int(overlap_frames) if str(overlap_frames).isdigit() else 22
+        if overlap_n == 39:
+            active_carry_tokens = CARRY_TOKENS_39              # 12
+            active_carry_frames = CARRY_FRAMES_39              # 39
+            active_carry_audio_steps = CARRY_AUDIO_STEPS_39      # 65
+            active_audio_context_length = 39                   # 39 frames = 65 audio steps
+            stitch_video_trim = 12
+            stitch_audio_trim = 65
+        else:
+            active_carry_tokens = CARRY_TOKENS                 # 7
+            active_carry_frames = CARRY_FRAMES                 # 22
+            active_carry_audio_steps = CARRY_AUDIO_STEPS       # 36
+            active_audio_context_length = 18                   # 18 frames = 30 audio steps
+            stitch_video_trim = 7
+            stitch_audio_trim = 30
 
         _LOG.info("=" * 60)
         if len(clips) == 1:
@@ -397,7 +483,14 @@ class FeiHouEasyH3ChainSampler:
                 len(clips), continuation_mode, sampling_engine
             )
         _LOG.info("  * 采样引擎: %s | 基础种子: %d (分配策略: %s)", sampling_engine, seed, seed_behavior)
-        _LOG.info("  * 衔接参数: 模式=%s | 上下文噪声=%.2f | CFG=%.1f", continuation_mode, context_noise, cfg)
+        _LOG.info(
+            "  * 衔接参数: 重叠=%d帧 (%d潜步, %d音步) | 模式=%s | 上下文噪声=%.2f | CFG=%.1f",
+            active_carry_frames, active_carry_tokens, active_carry_audio_steps, continuation_mode, context_noise, cfg
+        )
+        _LOG.info(
+            "  * 显存策略: 段间全卸载保底开关=%s (False=模型常驻显存零搬运连续采样; True=每段强制全卸载保底防OOM)",
+            unload_between_segments
+        )
         _LOG.info("  * 时序频移: 视频时钟Shift=%.1f, 音频时钟Shift=%.1f (自动对齐Sigmas: %s)", shift_video, shift_audio, auto_shift_sigmas)
         _LOG.info("=" * 60)
 
@@ -426,8 +519,10 @@ class FeiHouEasyH3ChainSampler:
 
         clip_latents: list[dict[str, Any]] = []
         prev_latent: dict[str, Any] | None = None
+        total_sample_start = time.perf_counter()
 
         for idx, clip in enumerate(clips):
+            clip_start_time = time.perf_counter()
             # Compute seed for this clip
             if seed_behavior == "increment":
                 clip_seed = (seed + idx) & 0xFFFFFFFFFFFFFFFF
@@ -483,6 +578,27 @@ class FeiHouEasyH3ChainSampler:
             if base_cond is None:
                 raise ValueError(f"Clip {clip.index} is missing base_conditioning.")
 
+            # External positive conditioning / BUNNY bridge integration
+            if positive is not None:
+                bridge_params = _extract_bunny_bridge_params(positive)
+                if bridge_params is not None:
+                    if idx == 0:
+                        _LOG.info(
+                            "Clip 1 (%s): 接入 BUNNY H3 Conditioning Bridge (Adapter: %s, Alpha: %.2f, Mode: %s)，应用语义桥增强",
+                            clip.name, bridge_params["adapter"], bridge_params["alpha"], bridge_params["magnitude_match"]
+                        )
+                        base_cond = positive
+                    else:
+                        _LOG.info(
+                            "Clip %d (%s): 自动对当前分镜独立条件动态广播应用 BUNNY H3 语义桥 (Adapter: %s, Alpha: %.2f)...",
+                            clip.index, clip.name, bridge_params["adapter"], bridge_params["alpha"]
+                        )
+                        base_cond = _apply_bunny_bridge_to_conditioning(base_cond, bridge_params)
+                else:
+                    if len(clips) == 1 or idx == 0:
+                        _LOG.info("Clip %d (%s): 使用外部连接的 positive 条件替代内部默认条件", clip.index, clip.name)
+                        base_cond = positive
+
             # Initial latent
             latent_image = getattr(clip, "initial_latent", None)
             if latent_image is None:
@@ -493,14 +609,29 @@ class FeiHouEasyH3ChainSampler:
             active_pos_cond = base_cond
             if idx > 0 and prev_latent is not None:
                 if continuation_mode in ("latent_carry", "hybrid"):
-                    _LOG.info("Clip %d: applying latent carry-over (7 tokens, context_noise=%.2f)...", clip.index, context_noise)
-                    latent_image = _carry_latent(prev_latent, latent_image, context_noise=context_noise)
-                    trim_frames = CARRY_FRAMES
+                    _LOG.info(
+                        "Clip %d: applying latent carry-over (%d tokens, %d audio steps, context_noise=%.2f)...",
+                        clip.index, active_carry_tokens, active_carry_audio_steps, context_noise
+                    )
+                    latent_image = _carry_latent(
+                        prev_latent,
+                        latent_image,
+                        carry_tokens=active_carry_tokens,
+                        carry_audio_steps=active_carry_audio_steps,
+                        context_noise=context_noise,
+                    )
+                    trim_frames = active_carry_frames
 
                 if continuation_mode in ("motion_context", "hybrid"):
-                    _LOG.info("Clip %d: injecting Motion Context keyframe anchors...", clip.index)
+                    _LOG.info(
+                        "Clip %d: injecting Motion Context keyframe anchors (video=%d frames, audio=%d frames)...",
+                        clip.index, active_carry_frames, active_audio_context_length
+                    )
                     active_pos_cond, mc_trim = inject_h3_motion_context(
-                        base_cond, prev_latent, context_length=22, audio_context_length=18
+                        base_cond,
+                        prev_latent,
+                        context_length=active_carry_frames,
+                        audio_context_length=active_audio_context_length,
                     )
                     if not trim_frames:
                         trim_frames = mc_trim
@@ -582,28 +713,47 @@ class FeiHouEasyH3ChainSampler:
             prev_latent = cpu_latent
             clip_latents.append(cpu_latent)
 
+            clip_elapsed = time.perf_counter() - clip_start_time
             v_part, a_part = unpack_h3_latent(cpu_latent)
             _LOG.info(
-                "  * 分镜 %d 采样完成: 视频 Latent Shape=%s (%d steps) | 音频 Latent Shape=%s (%d steps)",
+                "  * 分镜 %d/%d (%s) 采样完成: 耗时 %.2fs (约 %.1f 分钟) | 视频 Latent Shape=%s (%d steps) | 音频 Latent Shape=%s (%d steps)",
                 idx + 1,
+                len(clips),
+                clip.name,
+                clip_elapsed,
+                clip_elapsed / 60.0,
                 tuple(v_part.shape),
                 v_part.shape[2],
                 tuple(a_part.shape),
                 a_part.shape[-1],
             )
 
-            # Eagerly empty CUDA cache and trigger GC between segments
-            if torch.cuda.is_available():
-                try:
-                    import comfy.model_management as mm
-                    mm.soft_empty_cache()
-                except Exception:
-                    pass
-                import gc
-                gc.collect()
+            # Segment memory management
+            if idx < len(clips) - 1:
+                if unload_between_segments:
+                    # 保底模式：每段采样结束强制全卸载所有模型，以“牺牲搬运速度换取 100% 跑通不爆显存”
+                    if torch.cuda.is_available():
+                        try:
+                            import comfy.model_management as mm
+                            if hasattr(model, "model"):
+                                mm.unload_model_and_clones(model, unload_additional_models=True)
+                            if second_sampling_model is not None and second_sampling_model is not model:
+                                if hasattr(second_sampling_model, "model"):
+                                    mm.unload_model_and_clones(second_sampling_model, unload_additional_models=True)
+                            mm.soft_empty_cache()
+                            _LOG.info("[FeiHou ChainSampler] 【段间全卸载保底触发】已强制卸载所有模型并清空显存（分镜 %d 完成）。", idx + 1)
+                        except Exception as exc:
+                            _LOG.debug("Segment forced unload exception: %s", exc)
+                        import gc
+                        gc.collect()
+                else:
+                    # 默认高速模式：有用的模型留存在显存/内存中，不卸载模型，避免重复向 GPU 搬运 38.4GB
+                    _LOG.info(
+                        "[FeiHou ChainSampler] 【高速智能留存】保留模型权重于显存中，跳过段间卸载，下个分镜零搬运直接推理。"
+                    )
 
         # Stitch all sampled latents into a continuous latent (for backward compatibility)
-        stitcher = H3LatentStitcher(video_trim_steps=7, audio_trim_steps=30)
+        stitcher = H3LatentStitcher(video_trim_steps=stitch_video_trim, audio_trim_steps=stitch_audio_trim)
         final_latent = dict(stitcher.stitch(clip_latents, trim_overlap=True))
         v_stitched, a_stitched = unpack_h3_latent(final_latent)
         _LOG.info("=" * 60)
@@ -620,9 +770,11 @@ class FeiHouEasyH3ChainSampler:
         final_latent["clip_latents"] = clip_latents
         final_latent["feihou_multiclip_meta"] = {
             "clip_count": len(clip_latents),
-            "carry_tokens": CARRY_TOKENS,
-            "carry_frames": CARRY_FRAMES,
-            "carry_audio_steps": CARRY_AUDIO_STEPS,
+            "carry_tokens": active_carry_tokens,
+            "carry_frames": active_carry_frames,
+            "carry_audio_steps": active_carry_audio_steps,
+            "overlap_frames": str(active_carry_frames),
+            "unload_between_segments": bool(unload_between_segments),
             "continuation_mode": continuation_mode,
             "context_noise": float(context_noise),
             "shift_video": float(shift_video),
@@ -634,17 +786,23 @@ class FeiHouEasyH3ChainSampler:
             try:
                 import comfy.model_management as mm
                 if hasattr(model, "model"):
-                    mm.unload_model_and_clones(model, unload_additional_models=False)
+                    mm.unload_model_and_clones(model, unload_additional_models=True)
                 if second_sampling_model is not None and second_sampling_model is not model:
                     if hasattr(second_sampling_model, "model"):
-                        mm.unload_model_and_clones(second_sampling_model, unload_additional_models=False)
+                        mm.unload_model_and_clones(second_sampling_model, unload_additional_models=True)
                 mm.soft_empty_cache()
-                _LOG.info("[FeiHou ChainSampler] 已卸载 DiT 模型权重并释放显存，供后续 VAE 解码全速使用。")
+                _LOG.info("[FeiHou ChainSampler] 已卸载全部采样模型与辅助权重并清空显存缓存，让渡 18GB+ 显存供后续 VAE 解码全速使用。")
             except Exception as exc:
                 _LOG.debug("Unable to unload model after chain sampling: %s", exc)
             import gc
             gc.collect()
 
-        _LOG.info("[FeiHou ChainSampler] [Stage 2/3] 全部 %d 个分镜采样执行成功！", len(clips))
+        total_sample_elapsed = time.perf_counter() - total_sample_start
+        _LOG.info(
+            "[FeiHou ChainSampler] [Stage 2/3] 全部 %d 个分镜采样执行成功！总采样耗时: %.2fs (约 %.1f 分钟)",
+            len(clips),
+            total_sample_elapsed,
+            total_sample_elapsed / 60.0,
+        )
         _LOG.info("=" * 60)
         return (final_latent, len(clips))

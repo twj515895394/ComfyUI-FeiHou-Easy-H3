@@ -10,6 +10,7 @@ Decodes MiniMax H3 latents (both video and audio). Supports:
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Sequence
 
 import torch
@@ -50,6 +51,19 @@ def _resample_audio(waveform: torch.Tensor, source_rate: int, target_rate: int) 
         return waveform[..., indices]
 
 
+def _normalize_audio_waveform(waveform: torch.Tensor) -> torch.Tensor:
+    """Normalize waveform tensor to ComfyUI standard [B, Channels, Samples] layout."""
+    if not isinstance(waveform, torch.Tensor):
+        return waveform
+    if waveform.ndim == 2:
+        waveform = waveform.unsqueeze(0)
+    elif waveform.ndim == 3:
+        # If [B, Samples, Channels] with Channels <= 4 and Samples > 4, transpose to [B, Channels, Samples]
+        if waveform.shape[1] > 4 >= waveform.shape[2]:
+            waveform = waveform.movedim(-1, 1)
+    return waveform
+
+
 def _concat_audio(clips: Sequence[dict[str, Any] | None]) -> dict[str, Any] | None:
     """Concatenate multiple decoded audio clips along the temporal axis."""
     valid = [c for c in clips if c is not None and c.get("waveform") is not None]
@@ -58,7 +72,7 @@ def _concat_audio(clips: Sequence[dict[str, Any] | None]) -> dict[str, Any] | No
     sample_rate = int(valid[0].get("sample_rate") or 32000)
     waveforms = []
     for clip in valid:
-        wf = clip["waveform"]
+        wf = _normalize_audio_waveform(clip["waveform"])
         clip_sr = int(clip.get("sample_rate") or sample_rate)
         if clip_sr != sample_rate:
             wf = _resample_audio(wf, clip_sr, sample_rate)
@@ -79,10 +93,7 @@ def _decode_single_audio(audio_vae, audio_tensor: torch.Tensor) -> dict[str, Any
     if isinstance(sr, int):
         try:
             decoded = audio_vae.decode(audio_tensor)
-            if hasattr(decoded, "movedim"):
-                waveform = decoded.movedim(-1, 1).to(audio_tensor.device)
-            else:
-                waveform = decoded
+            waveform = _normalize_audio_waveform(decoded.to(audio_tensor.device))
             return {"waveform": waveform, "sample_rate": sr}
         except Exception:
             pass
@@ -91,16 +102,15 @@ def _decode_single_audio(audio_vae, audio_tensor: torch.Tensor) -> dict[str, Any
         from comfy_extras.nodes_audio import vae_decode_audio
         res = vae_decode_audio(audio_vae, {"samples": audio_tensor})
         if res is not None and isinstance(res.get("sample_rate"), int):
+            res = dict(res)
+            res["waveform"] = _normalize_audio_waveform(res["waveform"])
             return res
     except Exception:
         pass
 
     try:
         decoded = audio_vae.decode(audio_tensor)
-        if hasattr(decoded, "movedim"):
-            waveform = decoded.movedim(-1, 1).to(audio_tensor.device)
-        else:
-            waveform = decoded
+        waveform = _normalize_audio_waveform(decoded.to(audio_tensor.device))
         calc_sr = getattr(
             audio_vae,
             "audio_sample_rate",
@@ -149,11 +159,16 @@ class FeiHouEasyH3VAEDecode:
         # Check if samples contains multi-segment latents for pixel-space decoding (lanxi design)
         clip_latents = samples.get("clip_latents") if isinstance(samples, dict) else None
         if clip_latents and isinstance(clip_latents, list) and len(clip_latents) > 1:
+            multiclip_meta = samples.get("feihou_multiclip_meta") if isinstance(samples, dict) else {}
+            if not isinstance(multiclip_meta, dict):
+                multiclip_meta = {}
+            carry_frames = int(multiclip_meta.get("carry_frames", CARRY_FRAMES))
+
             _LOG.info("=" * 60)
             _LOG.info(
                 "[FeiHou VAEDecode] [Stage 3/3] 多分镜逐段解码与像素空间拼接（共 %d 个分镜，衔接裁切: %d 帧）",
                 len(clip_latents),
-                CARRY_FRAMES,
+                carry_frames,
             )
             _LOG.info("=" * 60)
             # Pre-clean VRAM
@@ -171,8 +186,10 @@ class FeiHouEasyH3VAEDecode:
             assembled_frames: torch.Tensor | None = None
             write_pos = 0
             use_preallocated = True
+            total_decode_start = time.perf_counter()
 
             for idx, seg_latent in enumerate(clip_latents):
+                seg_decode_start = time.perf_counter()
                 seg_v, seg_a = unpack_h3_latent(seg_latent)
                 _LOG.info(
                     "  -> 解码分镜 %d/%d (视频 Latent 形状: %s, 音频 Latent: %s)...",
@@ -194,7 +211,8 @@ class FeiHouEasyH3VAEDecode:
 
                 b, t, h, w, c = seg_frames.shape
                 seg_frames = seg_frames.reshape(b * t, h, w, c).detach().to("cpu")
-                _LOG.info("     分镜 %d 像素解码完成: 帧数=%d, 分辨率=%dx%d", idx + 1, seg_frames.shape[0], w, h)
+                seg_decode_elapsed = time.perf_counter() - seg_decode_start
+                _LOG.info("     分镜 %d 像素解码完成: 耗时 %.2fs, 帧数=%d, 分辨率=%dx%d", idx + 1, seg_decode_elapsed, seg_frames.shape[0], w, h)
 
                 seg_audio = None
                 if audio_vae is not None and seg_a is not None:
@@ -206,22 +224,22 @@ class FeiHouEasyH3VAEDecode:
 
                 # Pixel-space & waveform-space trimming for carried clips
                 if idx > 0:
-                    if int(seg_frames.shape[0]) > CARRY_FRAMES:
+                    if int(seg_frames.shape[0]) > carry_frames:
                         _LOG.info(
                             "     分镜 %d: 裁切前 %d 帧衔接重复帧 (剩余有效帧数: %d)",
                             idx + 1,
-                            CARRY_FRAMES,
-                            seg_frames.shape[0] - CARRY_FRAMES,
+                            carry_frames,
+                            seg_frames.shape[0] - carry_frames,
                         )
-                        seg_frames = seg_frames[CARRY_FRAMES:]
+                        seg_frames = seg_frames[carry_frames:]
                     if seg_audio is not None and seg_audio.get("waveform") is not None:
-                        trim_samples = _audio_samples(seg_audio, CARRY_FRAMES / FPS)
+                        trim_samples = _audio_samples(seg_audio, carry_frames / FPS)
                         if trim_samples and seg_audio["waveform"].shape[-1] > trim_samples:
                             _LOG.info(
-                                "     分镜 %d: 裁切前 %d 采样点音频 (%.2fs)",
+                                "     分镜 %d: 裁切前 %d 采样点音频 (%.3fs)",
                                 idx + 1,
                                 trim_samples,
-                                CARRY_FRAMES / FPS,
+                                carry_frames / FPS,
                             )
                             seg_audio["waveform"] = seg_audio["waveform"][..., trim_samples:]
 
@@ -229,7 +247,7 @@ class FeiHouEasyH3VAEDecode:
                 if idx == 0 and use_preallocated:
                     seg0_len = seg_frames.shape[0]
                     # Estimate total frame count assuming consistent segment lengths
-                    tot_est = seg0_len + (len(clip_latents) - 1) * max(0, seg0_len - CARRY_FRAMES)
+                    tot_est = seg0_len + (len(clip_latents) - 1) * max(0, seg0_len - carry_frames)
                     try:
                         assembled_frames = torch.empty((tot_est, h, w, c), dtype=torch.float32, device="cpu")
                         assembled_frames[:seg0_len] = seg_frames
@@ -272,16 +290,31 @@ class FeiHouEasyH3VAEDecode:
                 all_frames = torch.cat(frames_out, dim=0)
 
             all_audio = _concat_audio(audio_out)
+            total_decode_elapsed = time.perf_counter() - total_decode_start
             _LOG.info(
-                "[FeiHou VAEDecode] [Stage 3/3] 多分镜拼接解码完成: 合成总帧数=%d (约 %.2fs @ 24fps) | 音轨: %s",
+                "[FeiHou VAEDecode] [Stage 3/3] 多分镜拼接解码完成: 合成总帧数=%d (约 %.2fs @ 24fps) | 总解码耗时: %.2fs (约 %.1f 分钟) | 音轨: %s",
                 all_frames.shape[0],
                 all_frames.shape[0] / 24.0,
+                total_decode_elapsed,
+                total_decode_elapsed / 60.0,
                 f"已生成 (采样率: {all_audio.get('sample_rate', 44100)}Hz)" if (all_audio and "sample_rate" in all_audio) else ("已生成" if all_audio else "无"),
             )
             _LOG.info("=" * 60)
+
+            # Clean VRAM and RAM cache after decode completes
+            if torch.cuda.is_available():
+                try:
+                    import comfy.model_management as mm
+                    mm.soft_empty_cache()
+                except Exception:
+                    pass
+                import gc
+                gc.collect()
+
             return (all_frames, all_audio)
 
         # Direct single-pass decoding for 1-clip or pre-stitched latents
+        single_decode_start = time.perf_counter()
         video, audio = unpack_h3_latent(samples)
         total_steps = int(video.shape[2])
         _LOG.info("=" * 60)
@@ -304,8 +337,11 @@ class FeiHouEasyH3VAEDecode:
         if audio_vae is not None and audio is not None:
             audio_output = _decode_single_audio(audio_vae, audio)
 
+        single_decode_elapsed = time.perf_counter() - single_decode_start
         _LOG.info(
-            "[FeiHou VAEDecode] [Stage 3/3] 单分镜解码完成: 输出图像形状=%s (共 %d 帧, 约 %.2fs @ 24fps) | 音轨: %s",
+            "[FeiHou VAEDecode] [Stage 3/3] 单分镜解码完成: 耗时 %.2fs (约 %.1f 分钟) | 输出图像形状=%s (共 %d 帧, 约 %.2fs @ 24fps) | 音轨: %s",
+            single_decode_elapsed,
+            single_decode_elapsed / 60.0,
             tuple(video_images.shape),
             video_images.shape[0],
             video_images.shape[0] / 24.0,
