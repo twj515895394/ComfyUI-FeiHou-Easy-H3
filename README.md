@@ -55,7 +55,7 @@ Manager 安装时会执行依赖安装入口；手动解压后可在 Easy H3 设
 
 自定义 API 可直接填写完整的 HTTPS 地址，例如 https://api.example.com/v1，不需要维护域名白名单文件。API Key 和模型仍在 Easy H3 设置页中配置，并保存在本机 ComfyUI 用户目录中，不随工作流导出。
 
-外部提示词 API 仍要求 HTTPS；本机 Ollama 可使用 http://localhost:11434、127.0.0.1 或 ::1。API 设置、模型发现和即时提示词优化路由仍只接受运行 ComfyUI 的本机访问。
+外部提示词 API 仍要求 HTTPS；本机 Ollama 和 OpenAI/Gemini 兼容接口在 localhost、127.0.0.1 或 ::1 上可使用 HTTP。API 设置、模型发现和即时提示词优化路由仍只接受运行 ComfyUI 的本机访问。
 
 开发时可自行维护本机的同步配置；本仓库不会提交本机路径、API Key、上传媒体或输出元数据。
 

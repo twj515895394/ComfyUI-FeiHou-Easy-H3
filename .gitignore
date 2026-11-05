@@ -8,3 +8,5 @@ AGENTS.md
 /test/
 /tests/
 /production_pack_access.json
+.zcode/
+.scratch/

@@ -54,7 +54,7 @@ Manager can run the bundled install hook. Manual ZIP users can open Easy H3 sett
 
 Custom APIs can be entered directly as complete HTTPS URLs, such as https://api.example.com/v1; no domain allow-list file is required. Configure the API key and models in the Easy H3 settings page. API keys remain in the local ComfyUI user directory and are not exported with workflows.
 
-External prompt APIs still require HTTPS. Local Ollama may use http://localhost:11434, 127.0.0.1, or ::1. API settings, model discovery, and immediate prompt-optimization routes remain available only from the machine running ComfyUI.
+External prompt APIs still require HTTPS. Local Ollama and OpenAI/Gemini-compatible APIs may use HTTP at localhost, 127.0.0.1, or ::1. API settings, model discovery, and immediate prompt-optimization routes remain available only from the machine running ComfyUI.
 
 The package uses unique FeiHouEasyH3* node IDs and dedicated prompt-optimizer routes, so it can be installed alongside the original project.
 

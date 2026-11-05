@@ -1,0 +1,69 @@
+# 当前交接索引 (Current Handoff)
+
+- **最新快照**：[handoff-20261105-180000-refmod-mention-support.md](./handoff-20261105-180000-refmod-mention-support.md)
+- **更新时间**：2026-11-05 19:15:00
+- **当前状态**：
+  1. 彻底解决 Stage 2/3 分镜 2 采样时第三方 `PainterNodes` 的 `KeyError: 'latent'` 崩溃问题（严格仅修改本插件，不碰 ComfyUI 官方核心与外部插件）。
+  2. 修复 `chain_sampler.py` 中重复读取 `initial_latent` 覆盖潜空间续接 `_carry_latent` 的缺陷，确保 7 tokens 潜变量与 `noise_mask` 真实生效。
+  3. 分镜素材画廊组件全面支持**操作系统文件拖拽上传**（单文件/多文件顺延填充）、**槽位间拖拽调换排序**与高亮交互反馈。
+  4. 7 节点长视频工作流已规范部署至 `user/default/workflows/01_FeiHou_H3多分镜长视频_7节点工作流.json`。
+  5. 52 项单元测试全部通过。
+- **下阶段核心待办**：用户在秋叶启动器中重启 ComfyUI，在 Web 界面加载 7 节点工作流重新执行全链路生成。
+
+---
+
+## 核心进展归档（倒序）
+
+### 迭代 4（2026-11-05 19:15:00）：第三方 PainterNodes 猴子补丁冲突规避与潜变量续接修复
+1. **KeyError: 'latent' 根因定位与本插件单边兼容治理**：
+   - 报错源自 `ComfyUI-PainterNodes` 的 `PainterMiniMaxFL2VA.py` 对 `MiniMaxH3.extra_conds` 进行了全局猴子补丁。其代码在合并条件时假定所有 keyframe 均带视频潜变量（直接执行 `[kf["latent"] for kf in keyframes]`）；当分镜间注入纯音频上下文锚点（仅含 `audio_latent`）且分镜同时携带参考素材（`refs`）时，直接触发 `KeyError: 'latent'`。
+   - 在 `motion_context_kernel.py` 中重构音频上下文注入：严格保持 `minimax_keyframes` 仅存放具备 `"latent"` 的视频关键帧，音频上下文按照 MiniMax H3 底层标准封装为 `minimax_refs`（`{"kind": "audio", "ref_audio_t": ..., "audio_latent": ...}`），完美避开 PainterNodes 的未加判断遍历，同时兼顾原生 H3 音频对齐与特征提取。
+   - 新增 `sanitize_h3_conditioning` 条件防卫净化器并在 `chain_sampler.py` 采样前对正负条件进行统一清洗拦截，自动将任何无 `"latent"` 键的音频帧合规迁移至 `minimax_refs`。
+2. **Latent Carry-over 潜空间续接覆写 Bug 修复**：
+   - 修复 `chain_sampler.py` 在执行完 `_carry_latent` 后多余的重复读取代码，确保各分镜间的 7 tokens 潜变量续接与单通道 `noise_mask` 准确注入采样器。
+3. **测试套件全面验证**：
+   - 更新并新增 PainterNodes 兼容仿真测试，52 项单元测试 100% 通过。
+
+### 迭代 3（2026-11-05 18:00:00）：RefMod 连线识别、@ 菜单注入、素材编号顺延与 Prompt 规范化
+1. **RefMod 探测与目录缓存**：
+   - 创建 `web/modules/refmod_helper.js`，实现 `refmodsInputIsConnected` 连线检查，递归穿透 `Reroute`、`SetNode` / `GetNode` 虚拟连线定位源节点；
+   - 异步防抖拉取 `/feihou_easy_h3/refmods` 接口获取 RefMod 成员的视频/图片/音频类型与名称。
+2. **@ 菜单注入与序号顺延**：
+   - 在 `web/modules/mention_menu.js` 中将 RefMod 资产置顶，分配 `@视频1` 并展示紫色 RefMod 徽章；
+   - 本地全局视频与分镜私有视频自动向后顺延起始编号（如 `@视频2`、`@视频3`）；
+   - 画廊区视频配额标签动态显示 `视 (已占 X/3, 含RefMod)`。
+3. **主入口生命周期联动**：
+   - 在 `web/feihou_easy_h3_multi_clip.js` 中增加 `onConnectionsChange` 监听 `refmods` 端口变动，动态刷新目录并重新构建 UI。
+4. **后端 Prompt 标签转换**：
+   - 在 `multi_clip_node.py` 中引入 `normalize_prompt_mentions`，将 `@视频1: [name]` 或 `@视频1` 透明替换为 MiniMax H3 底层标准 `<Video 1>`，确保通过 `refmod_compat.validate_reference_tags` 校验及 CLIP Tokenizer 编码。
+
+### 迭代 2（2026-11-05 17:00:00）：多分镜大组件模块化、全局开关、外观优化与排查日志
+1. **全局共享素材与提示词开关**：
+   - 增加交互式切换开关。关闭时各分镜完全独立运行，不继承全局提示词，各分镜享有独立的满额配额（9图、3视频、3音频），从 `@图1`、`@视频1`、`@音频1` 开始独立编号。
+2. **分镜 1 默认强制常驻与单分镜普通视频模式**：
+   - “分镜 1”必须始终存在且不可删除；若用户仅保留 1 个分镜，整条工作流自动按标准单视频流水线执行，无拼接裁切开销。
+3. **前端 JS 模块化拆分（SRP 治理）**：
+   - 将原单个 1874 行庞大文件拆分至 `web/modules/`（`styles.js`、`data_model.js`、`ui_builder.js`、`widget_sync.js`、`mention_menu.js`、`gallery.js`），主入口精简至 ~140 行。
+4. **组件外观与输入框排版优化**：
+   - 分镜素材组件默认尺寸调整为宽 680px、高 940px，滚动容器最小高度提升至 580px；
+   - 全局与分镜提示词输入框设置为 `rows=5`、`min-height: 110px`、行高 `1.5`，可视视野显著提升；
+   - Tab 标签全面去除“走秀”等特定字眼，回归干净规范的 `分镜 1`、`分镜 2`、`分镜 3`；
+   - 工作流 7 个节点标题全面精简，去除大串长括号。
+5. **Stage 1/2/3 全链路排查排错日志**：
+   - 覆盖 Stage 1/3 条件解析、Stage 2/3 链式采样、Stage 3/3 视频解码，为用户人工测试提供清晰跟踪。
+
+### 迭代 1（2026-11-05 01:30:00）：H3 多分段架构对标蓝夕重构与全链路显存/内存优化
+1. **画质根因修复（对标 lanxi）**：
+   - 将原潜空间强行截断拼接重构为各分段独立 VAE 解码后，在像素空间（Pixel Space）无损裁切 22 帧，音频在波形空间对齐裁剪，彻底消除横向黑花条纹与重影。
+2. **H3 双时钟调度保护**：
+   - 注入 `minimax_h3_sigma_shift_video = 12.0` 与 `shift_audio = 3.0`，采样器内置自动纠偏识别，防止跳过细节成型期。
+3. **8 分段显存与内存治理**：
+   - 采样端 GPU->CPU 即时转存与显存回收，采样后卸载 DiT 让渡 18GB VRAM 给 2.0MP 3D VAE；
+   - 解码端基于 CPU 原地流式预分配写入（`assembled_frames`），消除 8 段拼接时的 85GB 内存翻倍峰值。
+
+---
+
+## 待办任务池（Pending Backlog）
+
+- [ ] **人工真机测试反馈跟踪**：
+  - 用户在秋叶启动器中重启 ComfyUI 后，在 Web 界面加载 7 节点工作流，结合控制台 Stage 1/2/3 日志进行实际生成质检。

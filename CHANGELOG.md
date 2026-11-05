@@ -8,6 +8,8 @@
 
 ## v1.4.22
 
+- Allows HTTP for loopback OpenAI/Gemini-compatible APIs used by local models; external APIs continue to require HTTPS.
+
 - Distinguishes identically named custom rules from built-in rules so selecting RefMod keeps the intended rule binding.
 
 - Adds the saved RefMod filmmaking prompt rule, unchanged, as the read-only built-in `refmod` template (`RefMod`). Main and Setup can select it without creating a custom rule; existing custom rules remain intact.

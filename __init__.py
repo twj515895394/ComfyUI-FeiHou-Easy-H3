@@ -17,6 +17,9 @@ from .production_continuation import FeiHouEasyH3ContinueOut
 from .face_refine import FeiHouEasyH3FaceRefine
 from .split_nodes import FeiHouEasyH3Media, FeiHouEasyH3Setup
 from .dual_sample import FeiHouEasyH3SampleEnhancer1st, FeiHouEasyH3SampleEnhancer2nd
+from .chain_sampler import FeiHouEasyH3ChainSampler
+from .multi_clip_node import FeiHouEasyH3MultiClip
+from .vae_decoder import FeiHouEasyH3VAEDecode
 
 NODE_CLASS_MAPPINGS = {
     "FeiHouEasyH3FaceRefine": FeiHouEasyH3FaceRefine,
@@ -37,6 +40,9 @@ NODE_CLASS_MAPPINGS = {
     "FeiHouEasyH3PromptPreview": FeiHouEasyH3PromptPreview,
     "FeiHouEasyH3SampleEnhancer1st": FeiHouEasyH3SampleEnhancer1st,
     "FeiHouEasyH3SampleEnhancer2nd": FeiHouEasyH3SampleEnhancer2nd,
+    "FeiHouEasyH3ChainSampler": FeiHouEasyH3ChainSampler,
+    "FeiHouEasyH3MultiClip": FeiHouEasyH3MultiClip,
+    "FeiHouEasyH3VAEDecode": FeiHouEasyH3VAEDecode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -58,6 +64,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "FeiHouEasyH3PromptPreview": "FeiHou Easy H3 Prompt Preview",
     "FeiHouEasyH3SampleEnhancer1st": "FeiHou Easy H3 1st Sample Enhancer（一采）",
     "FeiHouEasyH3SampleEnhancer2nd": "FeiHou Easy H3 2nd Sample Enhancer（二采）",
+    "FeiHouEasyH3ChainSampler": "FeiHou Easy H3 链式采样器",
+    "FeiHouEasyH3MultiClip": "FeiHou Easy H3 多分镜素材配置",
+    "FeiHouEasyH3VAEDecode": "FeiHou Easy H3 视频解码器",
 }
 
 WEB_DIRECTORY = "./web"

@@ -1,0 +1,172 @@
+{
+  "1": {
+    "class_type": "FeiHouEasyH3RemixLoader",
+    "_meta": {
+      "title": "1. H3 模型加载器"
+    },
+    "inputs": {
+      "remix_model": "Minimax/minimax_h3_hybrid_fl2va_ref2va_b25-49-bf16-pruned.safetensors",
+      "text_encoder": "qwen3vl_32b_minimax_h3_int8_convrot.safetensors",
+      "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+      "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+      "second_sampling_model": "无"
+    }
+  },
+  "2": {
+    "class_type": "FeiHouEasyH3MultiClip",
+    "_meta": {
+      "title": "2. 多分镜素材配置"
+    },
+    "inputs": {
+      "h3_bundle": [
+        "1",
+        0
+      ],
+      "mode": "reference",
+      "resolution": "2.0",
+      "aspect_ratio": "16:9",
+      "width": 1920,
+      "height": 1080,
+      "seconds": 10.0,
+      "steps": 8,
+      "transition_step": 6,
+      "global_prompt": "Masterpiece, cinematic lighting, photorealistic, 4k resolution, high quality, professional color grading, sharp details.",
+      "feihou_multi_clip_data": "{\"activeTab\": \"global\", \"enable_global\": true, \"global_prompt\": \"Masterpiece, cinematic lighting, photorealistic, 4k resolution, high quality, professional color grading, sharp details.\", \"global_media\": {\"images\": [], \"videos\": [], \"audios\": []}, \"clips\": [{\"index\": 1, \"name\": \"分镜 1\", \"prompt\": \"A character walking slowly through a modern minimalist space, cinematic side angle, natural sunlight streaming through high windows.\", \"override_steps\": false, \"override_seed\": false, \"seconds\": 10.0, \"steps\": 8, \"transition_step\": 6, \"seed\": 0, \"media\": {\"images\": [], \"videos\": [], \"audios\": []}}, {\"index\": 2, \"name\": \"分镜 2\", \"prompt\": \"Continue smoothly: the camera tracks alongside the character as they pause gracefully, turning toward the window with a thoughtful expression.\", \"override_steps\": false, \"override_seed\": false, \"seconds\": 10.0, \"steps\": 8, \"transition_step\": 6, \"seed\": 0, \"media\": {\"images\": [], \"videos\": [], \"audios\": []}}, {\"index\": 3, \"name\": \"分镜 3\", \"prompt\": \"Continue smoothly: the camera slowly pulls back into a wide cinematic view, capturing the expansive architectural space and soft ambient light.\", \"override_steps\": false, \"override_seed\": false, \"seconds\": 10.0, \"steps\": 8, \"transition_step\": 6, \"seed\": 0, \"media\": {\"images\": [], \"videos\": [], \"audios\": []}}]}",
+      "force_offload": false,
+      "low_vram_streamed_attention": false
+    }
+  },
+  "3": {
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "3. 采样器选择"
+    },
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "4": {
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "4. 调度步数"
+    },
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "scheduler": "simple",
+      "steps": [
+        "2",
+        6
+      ],
+      "denoise": 1.0
+    }
+  },
+  "5": {
+    "class_type": "FeiHouEasyH3ChainSampler",
+    "_meta": {
+      "title": "5. 链式采样器"
+    },
+    "inputs": {
+      "model": [
+        "2",
+        0
+      ],
+      "multi_clip_context": [
+        "2",
+        2
+      ],
+      "vae": [
+        "2",
+        3
+      ],
+      "sampler": [
+        "3",
+        0
+      ],
+      "sigmas": [
+        "4",
+        0
+      ],
+      "second_sampling_model": [
+        "2",
+        1
+      ],
+      "audio_vae": [
+        "2",
+        4
+      ],
+      "seed": 0,
+      "cfg": 1.0,
+      "sampling_engine": "selflift_avatar",
+      "seed_behavior": "increment",
+      "continuation_mode": "hybrid",
+      "context_noise": 0.0,
+      "shift_video": 12.0,
+      "shift_audio": 3.0,
+      "auto_shift_sigmas": true,
+      "lowres_scale": 0.5,
+      "rho": 0.0,
+      "w_min": 0.5,
+      "w_max": 1.0,
+      "upscaler_model": "h3_upscaler_lms_v0.1_fp32.safetensors",
+      "highres_tiling": false,
+      "tiling_mode": "auto",
+      "tiling_tiles": 2,
+      "tiling_axis": "auto",
+      "highres_tiling_mode": "global_stream",
+      "highres_token_chunk": 4096,
+      "highres_weight_cache_gb": 4.0
+    }
+  },
+  "6": {
+    "class_type": "FeiHouEasyH3VAEDecode",
+    "_meta": {
+      "title": "6. 视频解码器"
+    },
+    "inputs": {
+      "samples": [
+        "5",
+        0
+      ],
+      "vae": [
+        "2",
+        3
+      ],
+      "audio_vae": [
+        "2",
+        4
+      ],
+      "tile_temporal": true,
+      "tile_size": 27,
+      "overlap": 5
+    }
+  },
+  "7": {
+    "class_type": "VideoCombineV2",
+    "_meta": {
+      "title": "7. 视频输出保存"
+    },
+    "inputs": {
+      "images": [
+        "6",
+        0
+      ],
+      "audio": [
+        "6",
+        1
+      ],
+      "frame_rate": 24,
+      "loop_count": 0,
+      "filename_prefix": "video/feihou_h3_multiclip_2.0mp",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 19,
+      "save_metadata": true,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true
+    }
+  }
+}
