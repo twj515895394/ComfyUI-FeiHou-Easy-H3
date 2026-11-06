@@ -2360,6 +2360,62 @@ class MiniMaxH3Bundle:
             self._model_cache_key = cache_key
             return self._model
 
+    @staticmethod
+    def _carry_acceleration(first_model, second_model):
+        """Copy non-LoRA patches from the first pass onto a freshly loaded second pass.
+
+        Acceleration nodes (sparse attention, sage attention, chunked
+        feed-forward) are wired after the first-pass output, so a second pass
+        loaded from its own file never sees them. LoRA patches and injections
+        belong to each pass's own stack and are left untouched.
+        """
+        if first_model is None or second_model is None or first_model is second_model:
+            return second_model
+        source = getattr(first_model, "model_options", None)
+        if not isinstance(source, dict):
+            return second_model
+        target = second_model.model_options
+        if not isinstance(target, dict):
+            return second_model
+        for key in ("transformer_options",):
+            src = source.get(key)
+            if isinstance(src, dict) and not target.get(key):
+                target[key] = dict(src)
+        object_patches = getattr(first_model, "object_patches", None)
+        if isinstance(object_patches, dict) and hasattr(second_model, "object_patches"):
+            for name, patch in object_patches.items():
+                second_model.object_patches.setdefault(name, patch)
+        return second_model
+
+    def _second_pass_from_first(self, first_model, cache_token):
+        """Clone the first-pass patcher and swap only its LoRA patches.
+
+        The clone shares the loaded transformer weights and keeps every
+        non-LoRA patch, so acceleration nodes wired after the first pass
+        (sparse attention, sage attention, chunked feed-forward) apply to the
+        second pass without a second 38GB load.
+        """
+        cache_key = ("derived", id(first_model), cache_token)
+        with self._lock:
+            if self._second_model is not None and self._second_model_cache_key == cache_key:
+                return self._second_model
+            cloned = first_model.clone()
+            if hasattr(cloned, "patches"):
+                cloned.patches.clear()
+            for key in ("lora", "bypass_lora"):
+                try:
+                    cloned.set_injections(key, [])
+                except Exception:
+                    pass
+            model = self._apply_loras(cloned, self.second_lora_stack)
+            self._second_model = model
+            self._second_model_cache_key = cache_key
+            logging.info(
+                "Easy H3 Remix: 二采复用一采模型权重与加速补丁，仅替换为二采 LoRA（%d 个）",
+                len(self.second_lora_stack),
+            )
+            return model
+
     def second_sampling_model_for(self, kind: str):
         """Load the second-pass transformer with the second-pass LoRA stack.
 
@@ -2370,6 +2426,19 @@ class MiniMaxH3Bundle:
         if not self.second_sampling_enabled:
             return None
         kind = "ref2va" if kind == "ref2va" else "fl2va"
+        # No dedicated second-pass model: derive the second pass from the
+        # first-pass patcher instead of loading the 38GB transformer again.
+        # Cloning copies the downstream acceleration patches (sparse attention,
+        # sage attention, chunked feed-forward) onto the second pass; only the
+        # LoRA patches are swapped for the second-pass stack.
+        requested_name = self.second_ref2va_model_name if kind == "ref2va" else self.second_fl2va_model_name
+        if self.remix_loader and _is_none_model(requested_name):
+            shared = self._model
+            if shared is not None and not self.second_lora_stack:
+                logging.info("Easy H3 Remix: 二采无独立模型且无二采 LoRA，复用一采模型，跳过一采/二采交接卸载")
+                return shared
+            if shared is not None:
+                return self._second_pass_from_first(shared, cache_token=("shared-first", self.second_lora_stack))
         model_name = self.second_ref2va_model_name if kind == "ref2va" else self.second_fl2va_model_name
         using_remix_fallback = _is_none_model(model_name) and self.remix_loader
         if using_remix_fallback:
@@ -2394,6 +2463,7 @@ class MiniMaxH3Bundle:
                 # Keep a pre-LoRA patcher, sharing weights without a second load.
                 clean_base = base_model.clone()
                 model = self._apply_loras(base_model, self.second_lora_stack) if self.second_lora_stack else base_model
+                model = self._carry_acceleration(self._model, model)
                 model.set_attachments("feihou_h3_clean_second_base", clean_base)
                 self._second_model = model
                 self._second_model_kind = kind

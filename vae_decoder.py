@@ -274,15 +274,11 @@ class FeiHouEasyH3VAEDecode:
                 if seg_audio is not None:
                     audio_out.append(seg_audio)
 
-                # Free VRAM immediately between segments
-                if torch.cuda.is_available():
-                    try:
-                        import comfy.model_management as mm
-                        mm.soft_empty_cache()
-                    except Exception:
-                        pass
-                    import gc
-                    gc.collect()
+                # Keep both VAEs resident between segments. soft_empty_cache() here
+                # makes ComfyUI restage the video and audio VAEs (~5.5GB) before
+                # every following segment. The segment frames are already copied
+                # into the assembly buffer and deleted above.
+                gc.collect()
 
             if use_preallocated and assembled_frames is not None:
                 all_frames = assembled_frames[:write_pos]
