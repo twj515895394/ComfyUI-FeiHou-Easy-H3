@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import random
 import time
 from typing import Any, Sequence
@@ -258,39 +259,48 @@ def _extract_bunny_bridge_params(conditioning: Any) -> dict[str, Any] | None:
     return None
 
 
+_BUNNY_BRIDGE_RUNTIME_MODULE: Any = None
+
+
 def _apply_bunny_bridge_to_conditioning(conditioning: Any, bridge_params: dict[str, Any]) -> Any:
     """Safely apply BUNNY H3 bridge MLP to a conditioning object using extracted parameters."""
+    global _BUNNY_BRIDGE_RUNTIME_MODULE
     if not bridge_params or not conditioning:
         return conditioning
     try:
-        bridge_dirs = [
-            "X:/ComfyUI-aki-v2/ComfyUI/custom_nodes/BUNNY_H3_Conditioning_Bridge",
-        ]
-        if folder_paths and hasattr(folder_paths, "base_path"):
-            bridge_dirs.append(os.path.join(folder_paths.base_path, "custom_nodes", "BUNNY_H3_Conditioning_Bridge"))
+        if _BUNNY_BRIDGE_RUNTIME_MODULE is None:
+            bridge_dirs = [
+                "X:/ComfyUI-aki-v2/ComfyUI/custom_nodes/BUNNY_H3_Conditioning_Bridge",
+            ]
+            if folder_paths and hasattr(folder_paths, "base_path"):
+                bridge_dirs.append(os.path.join(folder_paths.base_path, "custom_nodes", "BUNNY_H3_Conditioning_Bridge"))
 
-        target_file = None
-        for b_dir in bridge_dirs:
-            if b_dir:
-                cand = os.path.join(b_dir, "nodes.py")
-                if os.path.isfile(cand):
-                    target_file = cand
-                    break
+            target_file = None
+            for b_dir in bridge_dirs:
+                if b_dir:
+                    cand = os.path.join(b_dir, "nodes.py")
+                    if os.path.isfile(cand):
+                        target_file = cand
+                        break
 
-        if target_file is not None:
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("bunny_bridge_runtime", target_file)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(mod)
-                if hasattr(mod, "_apply_bridge"):
-                    return mod._apply_bridge(
-                        conditioning,
-                        adapter_name=bridge_params.get("adapter"),
-                        alpha=bridge_params.get("alpha", 0.1),
-                        magnitude_match=bridge_params.get("magnitude_match", "per_token"),
-                        enabled=True,
-                    )
+            if target_file is not None:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("bunny_bridge_runtime", target_file)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                    if hasattr(mod, "_apply_bridge"):
+                        # Cache the runtime module so the adapter weights are loaded once,
+                        # not re-read from disk on every clip.
+                        _BUNNY_BRIDGE_RUNTIME_MODULE = mod
+        if _BUNNY_BRIDGE_RUNTIME_MODULE is not None:
+            return _BUNNY_BRIDGE_RUNTIME_MODULE._apply_bridge(
+                conditioning,
+                adapter_name=bridge_params.get("adapter"),
+                alpha=bridge_params.get("alpha", 0.1),
+                magnitude_match=bridge_params.get("magnitude_match", "per_token"),
+                enabled=True,
+            )
     except Exception as exc:
         _LOG.warning("Could not apply BUNNY H3 bridge to conditioning: %s", exc)
     return conditioning
