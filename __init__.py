@@ -18,6 +18,7 @@ from .face_refine import FeiHouEasyH3FaceRefine
 from .split_nodes import FeiHouEasyH3Media, FeiHouEasyH3Setup
 from .dual_sample import FeiHouEasyH3SampleEnhancer1st, FeiHouEasyH3SampleEnhancer2nd
 from .chain_sampler import FeiHouEasyH3ChainSampler
+from .resumable_chain_sampler import FeiHouEasyH3ResumableChainSampler
 from .multi_clip_node import FeiHouEasyH3MultiClip
 from .vae_decoder import FeiHouEasyH3VAEDecode
 
@@ -41,6 +42,7 @@ NODE_CLASS_MAPPINGS = {
     "FeiHouEasyH3SampleEnhancer1st": FeiHouEasyH3SampleEnhancer1st,
     "FeiHouEasyH3SampleEnhancer2nd": FeiHouEasyH3SampleEnhancer2nd,
     "FeiHouEasyH3ChainSampler": FeiHouEasyH3ChainSampler,
+    "FeiHouEasyH3ResumableChainSampler": FeiHouEasyH3ResumableChainSampler,
     "FeiHouEasyH3MultiClip": FeiHouEasyH3MultiClip,
     "FeiHouEasyH3VAEDecode": FeiHouEasyH3VAEDecode,
 }
@@ -65,6 +67,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "FeiHouEasyH3SampleEnhancer1st": "FeiHou Easy H3 1st Sample Enhancer（一采）",
     "FeiHouEasyH3SampleEnhancer2nd": "FeiHou Easy H3 2nd Sample Enhancer（二采）",
     "FeiHouEasyH3ChainSampler": "FeiHou Easy H3 链式采样器",
+    "FeiHouEasyH3ResumableChainSampler": "FeiHou Easy H3 可续接链式采样器",
     "FeiHouEasyH3MultiClip": "FeiHou Easy H3 多分镜素材配置",
     "FeiHouEasyH3VAEDecode": "FeiHou Easy H3 视频解码器",
 }

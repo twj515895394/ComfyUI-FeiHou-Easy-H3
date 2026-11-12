@@ -112,6 +112,19 @@ def _patch_h3_dual_clock(model, shift_video: float = 12.0, shift_audio: float = 
     return patched
 
 
+def _effective_selflift_lowres_scale(model, latent_dict: dict[str, Any], configured_scale: float) -> tuple[float, float, float]:
+    """Keep the SelfLift low-resolution stage at least 0.5 MP where possible."""
+    video, _audio = _safe_unpack_av(latent_dict)
+    latent_format = model.get_model_object("latent_format") if hasattr(model, "get_model_object") else None
+    try:
+        pixel_scale = float(getattr(latent_format, "spacial_downscale_ratio", 16) or 16)
+    except (TypeError, ValueError):
+        pixel_scale = 16.0
+    target_mp = (int(video.shape[-2]) * pixel_scale) * (int(video.shape[-1]) * pixel_scale) / 1_000_000
+    minimum = 0.7 if target_mp <= 1.0 else max(0.25, (0.5 / target_mp) ** 0.5)
+    return max(float(configured_scale), minimum), target_mp, minimum
+
+
 def _safe_unpack_av(latent_dict: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor | None]:
     """Safely unpack latent into (video, audio_or_none). Supports video-only latents."""
     if not isinstance(latent_dict, dict) or "samples" not in latent_dict:
@@ -403,7 +416,7 @@ class FeiHouEasyH3ChainSampler:
                 "negative": ("CONDITIONING", {"tooltip": "负向提示词条件（可选；未连线时自动置零生成空负向）"}),
                 "positive": ("CONDITIONING", {"tooltip": "正向提示词条件（可选；接入 BUNNY H3 语义桥或自定义 Conditioning）"}),
                 # SelfLift parameters (transition_step 已由上游 Node 2 MultiClip 上下文全局及分镜统一传递，不再作为前端重复控件显示)
-                "lowres_scale": ("FLOAT", {"default": 0.5, "min": 0.25, "max": 1.0, "step": 0.05, "tooltip": "SelfLift 一采低分辨率缩放比例（默认 0.5），先在 1/2 尺寸上极速构建骨架与大动态"}),
+                "lowres_scale": ("FLOAT", {"default": 0.5, "min": 0.25, "max": 1.0, "step": 0.05, "tooltip": "SelfLift H3 视频一采缩放比例：目标≤1.0MP时至少0.7；目标>1.0MP时按面积保证一采至少约0.5MP。高于自动下限的设置保持不变"}),
                 "rho": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "SelfLift 噪声调度平滑参数（默认 0.0）"}),
                 "w_min": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "SelfLift 一采向二采超分过渡的初始融合权重（默认 0.5）"}),
                 "w_max": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.05, "tooltip": "SelfLift 二采超分阶段的最大精修权重（默认 1.0）"}),
@@ -674,6 +687,15 @@ class FeiHouEasyH3ChainSampler:
 
             if sampling_engine == "selflift_avatar" and selflift_inst is not None:
                 high_model = second_sampling_model if second_sampling_model is not None else model
+                effective_lowres_scale, target_mp, minimum_lowres_scale = _effective_selflift_lowres_scale(
+                    model, latent_image, lowres_scale
+                )
+                if effective_lowres_scale > float(lowres_scale):
+                    _LOG.info(
+                        "Clip %d: SelfLift 目标画布 %.3f MP，lowres_scale 从 %.3f 自动提高到 %.3f "
+                        "（当前画布下限 %.3f）",
+                        clip.index, target_mp, float(lowres_scale), effective_lowres_scale, minimum_lowres_scale,
+                    )
                 res = selflift_inst.sample(
                     low_res_model=model,
                     positive=active_pos_cond,
@@ -685,7 +707,7 @@ class FeiHouEasyH3ChainSampler:
                     seed=clip_seed,
                     cfg=cfg,
                     transition_step=clip_trans_step,
-                    lowres_scale=lowres_scale,
+                    lowres_scale=effective_lowres_scale,
                     rho=rho,
                     w_min=w_min,
                     w_max=w_max,

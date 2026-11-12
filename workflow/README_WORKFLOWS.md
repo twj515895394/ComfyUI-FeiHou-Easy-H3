@@ -22,6 +22,13 @@
 
 部分工作流还需要额外的 LoRA 或其他自定义节点，具体以工作流中的节点为准。
 
+### 长视频逐段续接示例
+
+- 示例工作流：[02_h3_long_video_resumable_example.json](../workflows/02_h3_long_video_resumable_example.json)
+- 参数、素材分镜和 Agent 逐段生成/审核操作手册：[H3 长视频可续接工作流手册](../docs/long-video-resumable-workflow.md)
+
+The resumable long-video example and the agent's segment-by-segment production/review procedure are documented here: [H3 Resumable Long-Video Workflow Manual](../docs/long-video-resumable-workflow.md).
+
 ---
 
 # FeiHou Easy H3 Workflow Guide
